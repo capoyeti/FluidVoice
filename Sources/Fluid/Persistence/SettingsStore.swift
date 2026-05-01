@@ -952,6 +952,24 @@ final class SettingsStore: ObservableObject {
         self.promptResolution(for: mode, appBundleID: appBundleID).source
     }
 
+    /// Literal placeholder that gets substituted with the raw transcription
+    /// when composing the user message for a dictation cleanup call.
+    static let transcriptPlaceholder = "${transcript}"
+
+    /// Compose the user-turn string for a dictation cleanup call by folding
+    /// the transcript into the prompt template. If the template contains the
+    /// `${transcript}` placeholder, the placeholder is replaced; otherwise
+    /// the transcript is appended after a blank line, matching the pre-PR
+    /// behaviour of sending the transcript as a separate user message.
+    static func renderDictationUserMessage(promptText: String, transcript: String) -> String {
+        if promptText.contains(self.transcriptPlaceholder) {
+            return promptText.replacingOccurrences(of: self.transcriptPlaceholder, with: transcript)
+        }
+        let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedPrompt.isEmpty { return transcript }
+        return promptText + "\n\n" + transcript
+    }
+
     private func defaultPromptResolution(
         for mode: PromptMode,
         source: PromptResolutionSource,
@@ -1247,7 +1265,10 @@ final class SettingsStore: ObservableObject {
             let value = self.defaults.object(forKey: Keys.enableStreamingPreview)
             return value as? Bool ?? true // Default to true (enabled)
         }
-        set { self.defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.enableStreamingPreview)
+        }
     }
 
     var enableAIStreaming: Bool {
@@ -1306,12 +1327,14 @@ final class SettingsStore: ObservableObject {
 
     /// Size options for the recording overlay
     enum OverlaySize: String, CaseIterable, Codable {
+        case pill
         case small
         case medium
         case large
 
         var displayName: String {
             switch self {
+            case .pill: return "Pill"
             case .small: return "Small"
             case .medium: return "Medium"
             case .large: return "Large"
@@ -1332,6 +1355,22 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Internal presentation modes for the top notch overlay.
+    /// This is intentionally separate from bottom overlay sizing.
+    enum NotchPresentationMode: String, CaseIterable, Codable {
+        case standard
+        case minimal
+
+        var displayName: String {
+            switch self {
+            case .standard:
+                return "Standard Notch"
+            case .minimal:
+                return "Compact"
+            }
+        }
+    }
+
     /// Where the recording overlay appears (default: bottom)
     var overlayPosition: OverlayPosition {
         get {
@@ -1345,6 +1384,22 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.overlayPosition)
+        }
+    }
+
+    /// Internal-only top notch presentation mode. No public settings UI yet.
+    var notchPresentationMode: NotchPresentationMode {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.notchPresentationMode),
+                  let mode = NotchPresentationMode(rawValue: raw)
+            else {
+                return .standard
+            }
+            return mode
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.notchPresentationMode)
         }
     }
 
@@ -2139,6 +2194,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Whether to show a native notification when AI post-processing fails and raw text is used
+    var notifyAIProcessingFailures: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.notifyAIProcessingFailures)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.notifyAIProcessingFailures)
+        }
+    }
+
     func makeBackupPayload() -> SettingsBackupPayload {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
@@ -2188,6 +2255,7 @@ final class SettingsStore: ObservableObject {
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
             saveTranscriptionHistory: self.saveTranscriptionHistory,
+            notifyAIProcessingFailures: self.notifyAIProcessingFailures,
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
@@ -2257,6 +2325,9 @@ final class SettingsStore: ObservableObject {
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
         self.saveTranscriptionHistory = payload.saveTranscriptionHistory
+        if let notifyAIProcessingFailures = payload.notifyAIProcessingFailures {
+            self.notifyAIProcessingFailures = notifyAIProcessingFailures
+        }
         self.weekendsDontBreakStreak = payload.weekendsDontBreakStreak
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
@@ -3567,6 +3638,7 @@ private extension SettingsStore {
         // Stats Keys
         static let userTypingWPM = "UserTypingWPM"
         static let saveTranscriptionHistory = "SaveTranscriptionHistory"
+        static let notifyAIProcessingFailures = "NotifyAIProcessingFailures"
 
         // Filler Words
         static let fillerWords = "FillerWords"
@@ -3590,6 +3662,7 @@ private extension SettingsStore {
 
         // Overlay Position
         static let overlayPosition = "OverlayPosition"
+        static let notchPresentationMode = "NotchPresentationMode"
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"
         static let overlaySize = "OverlaySize"

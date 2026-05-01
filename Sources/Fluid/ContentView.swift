@@ -13,6 +13,22 @@ import CoreGraphics
 import Security
 import SwiftUI
 
+// MARK: - AI Processing Errors
+
+enum AIProcessingError: LocalizedError {
+    case missingAPIKey(provider: String)
+    case emptyResponse
+
+    var errorDescription: String? {
+        switch self {
+        case let .missingAPIKey(provider):
+            return "API key not set for \(provider)"
+        case .emptyResponse:
+            return "AI returned an empty response"
+        }
+    }
+}
+
 // MARK: - Sidebar Item Enum
 
 enum SidebarItem: Hashable {
@@ -69,6 +85,7 @@ enum ShortcutRecordingTarget: String, Hashable {
 
 // NOTE: Streaming and AI response parsing is now handled by LLMClient
 
+// swiftlint:disable type_body_length
 struct ContentView: View {
     private enum ActiveRecordingMode: String {
         case none
@@ -237,6 +254,7 @@ struct ContentView: View {
                 let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
                 self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
             }
+            self.handlePendingAppNavigation()
 
             // Reset auto-restart flag if permission was revoked (allows re-triggering if user re-grants)
             if !self.accessibilityEnabled {
@@ -296,6 +314,7 @@ struct ContentView: View {
 
             // Set up notch click callback for navigating to in-app Command Mode
             NotchOverlayManager.shared.onNotchClicked = {
+                guard NotchOverlayManager.shared.canHandleNotchCommandTap else { return }
                 if !NotchContentState.shared.commandConversationHistory.isEmpty {
                     NotchOverlayManager.shared.hide()
                     self.menuBarManager.openCommandModeFromUI()
@@ -304,19 +323,23 @@ struct ContentView: View {
 
             // Set up command mode callbacks for notch
             NotchOverlayManager.shared.onCommandFollowUp = { [weak commandModeService] text in
+                guard NotchOverlayManager.shared.allowsCommandNotchActions else { return }
                 await commandModeService?.processFollowUpCommand(text)
             }
 
             // Chat management callbacks
             NotchOverlayManager.shared.onNewChat = { [weak commandModeService] in
+                guard NotchOverlayManager.shared.allowsCommandNotchActions else { return }
                 commandModeService?.createNewChat()
             }
 
             NotchOverlayManager.shared.onSwitchChat = { [weak commandModeService] chatID in
+                guard NotchOverlayManager.shared.allowsCommandNotchActions else { return }
                 commandModeService?.switchToChat(id: chatID)
             }
 
             NotchOverlayManager.shared.onClearChat = { [weak commandModeService] in
+                guard NotchOverlayManager.shared.allowsCommandNotchActions else { return }
                 commandModeService?.deleteCurrentChat()
             }
 
@@ -588,6 +611,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
             self.selectedSidebarItem = .customDictionary
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
+            self.handlePendingAppNavigation()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
             self.reloadSettingsStateAfterBackupRestore()
         }
@@ -779,6 +805,15 @@ struct ContentView: View {
             self.selectedSidebarItem = .preferences
         case .commandMode:
             self.selectedSidebarItem = .commandMode
+        }
+    }
+
+    private func handlePendingAppNavigation() {
+        guard let destination = AppNavigationRouter.shared.consumePendingDestination() else { return }
+
+        switch destination {
+        case .history:
+            self.selectedSidebarItem = .history
         }
     }
 
@@ -1312,6 +1347,14 @@ struct ContentView: View {
     }
 
     private func saveSavedProviders() {
+        let storedProviders = SettingsStore.shared.savedProviders
+        if self.savedProviders.isEmpty, !storedProviders.isEmpty {
+            DebugLogger.shared.warning(
+                "Skipped stale empty savedProviders write from ContentView.",
+                source: "ContentView"
+            )
+            return
+        }
         SettingsStore.shared.savedProviders = self.savedProviders
     }
 
@@ -1493,7 +1536,7 @@ struct ContentView: View {
         _ inputText: String,
         overrideSystemPrompt: String? = nil,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil
-    ) async -> String {
+    ) async throws -> String {
         // CRITICAL FIX: Read current settings from SettingsStore, not stale @State copies
         // This ensures AI provider/model changes in AISettingsView take effect immediately
         let currentSelectedProviderID = SettingsStore.shared.selectedProviderID
@@ -1526,14 +1569,34 @@ struct ContentView: View {
 
         DebugLogger.shared.debug("processTextWithAI using provider=\(derivedCurrentProvider), model=\(derivedSelectedModel)", source: "ContentView")
 
-        // Resolve the effective system prompt once so every provider path
-        // honors transient overrides such as "Transcribe with Prompt".
+        // Resolve the effective prompt once so every provider path honors
+        // transient overrides such as "Transcribe with Prompt".
         let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
-        let systemPrompt: String = {
+        let promptText: String = {
             let override = overrideSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !override.isEmpty { return override }
             return self.buildSystemPrompt(appInfo: appInfo, dictationSlot: dictationSlot)
         }()
+
+        // Dictation cleanup folds the prompt + transcript into a single user
+        // turn (substituting `${transcript}` when present, otherwise appending
+        // the transcript after a blank line). Non-dictation callers — the AI
+        // chat tab specifically — keep the legacy two-message layout where
+        // the prompt is the system turn and the input is the user turn.
+        let isDictationCall = overrideSystemPrompt != nil || dictationSlot != nil
+
+        let systemPrompt: String
+        let userMessageContent: String
+        if isDictationCall {
+            systemPrompt = ""
+            userMessageContent = SettingsStore.renderDictationUserMessage(
+                promptText: promptText,
+                transcript: inputText
+            )
+        } else {
+            systemPrompt = promptText
+            userMessageContent = inputText
+        }
 
         // Route to Apple Intelligence if selected
         if currentSelectedProviderID == "apple-intelligence" {
@@ -1563,10 +1626,13 @@ struct ContentView: View {
                     self.logDictationPromptTrace("Built-in default system prompt (baseline)", value: SettingsStore.defaultSystemPromptText(for: .dictate))
                     self.logDictationPromptTrace("Final system prompt sent to model", value: systemPrompt)
                     self.logDictationPromptTrace("Input transcription (Q)", value: inputText)
+                    if userMessageContent != inputText {
+                        self.logDictationPromptTrace("Final user message sent to model", value: userMessageContent)
+                    }
                     self.logDictationPromptTrace("Selected context text", value: "<none (dictation mode)>")
                 }
                 DebugLogger.shared.debug("Using Apple Intelligence for transcription cleanup", source: "ContentView")
-                let output = await provider.process(systemPrompt: systemPrompt, userText: inputText)
+                let output = try await provider.process(systemPrompt: systemPrompt, userText: userMessageContent)
                 if self.shouldTracePromptProcessing {
                     self.logDictationPromptTrace("Model answer (A)", value: output)
                 }
@@ -1582,7 +1648,7 @@ struct ContentView: View {
 
         if !isLocal {
             guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-                return "Error: API Key not set for \(derivedCurrentProvider)"
+                throw AIProcessingError.missingAPIKey(provider: derivedCurrentProvider)
             }
         }
 
@@ -1614,6 +1680,9 @@ struct ContentView: View {
             }
             self.logDictationPromptTrace("Final system prompt sent to model", value: systemPrompt)
             self.logDictationPromptTrace("Input transcription (Q)", value: inputText)
+            if userMessageContent != inputText {
+                self.logDictationPromptTrace("Final user message sent to model", value: userMessageContent)
+            }
             self.logDictationPromptTrace("Selected context text", value: "<none (dictation mode)>")
         }
 
@@ -1641,11 +1710,15 @@ struct ContentView: View {
             )
         }
 
-        // Build messages array
-        let messages: [[String: Any]] = [
-            ["role": "system", "content": systemPrompt],
-            ["role": "user", "content": inputText],
-        ]
+        // Build messages array. For dictation cleanup the whole prompt +
+        // transcript is folded into a single user message, so we omit the
+        // (empty) system role. Non-dictation callers keep the legacy
+        // system + user shape.
+        var messages: [[String: Any]] = []
+        if !systemPrompt.isEmpty {
+            messages.append(["role": "system", "content": systemPrompt])
+        }
+        messages.append(["role": "user", "content": userMessageContent])
 
         // NOTE: Transcription doesn't need streaming - the full result appears at once
         // Streaming is only useful for Command/Rewrite modes where real-time display helps
@@ -1669,26 +1742,24 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Using LLMClient for transcription (streaming=\(enableStreaming))", source: "ContentView")
 
-        do {
-            let response = try await LLMClient.shared.call(config)
+        let response = try await LLMClient.shared.call(config)
 
-            // Log thinking if present (for debugging)
-            if let thinking = response.thinking {
-                DebugLogger.shared.debug("LLM thinking tokens extracted (\(thinking.count) chars)", source: "ContentView")
-                if self.shouldTracePromptProcessing {
-                    self.logDictationPromptTrace("Model thinking", value: thinking)
-                }
-            }
-
+        // Log thinking if present (for debugging)
+        if let thinking = response.thinking {
+            DebugLogger.shared.debug("LLM thinking tokens extracted (\(thinking.count) chars)", source: "ContentView")
             if self.shouldTracePromptProcessing {
-                self.logDictationPromptTrace("Model answer (A)", value: response.content)
+                self.logDictationPromptTrace("Model thinking", value: thinking)
             }
-
-            return response.content.isEmpty ? "<no content>" : response.content
-        } catch {
-            DebugLogger.shared.error("AI API error: \(error.localizedDescription)", source: "ContentView")
-            return "Error: \(error.localizedDescription)"
         }
+
+        if self.shouldTracePromptProcessing {
+            self.logDictationPromptTrace("Model answer (A)", value: response.content)
+        }
+
+        guard !response.content.isEmpty else {
+            throw AIProcessingError.emptyResponse
+        }
+        return response.content
     }
 
     // MARK: - Streaming Response Handler (DEPRECATED - Now handled by LLMClient)
@@ -1714,12 +1785,12 @@ struct ContentView: View {
 
         self.clearActiveRecordingMode()
 
-        // Show "Transcribing..." state before calling stop() to keep overlay visible.
+        // Show "Transcribing" state before calling stop() to keep overlay visible.
         // The asr.stop() call performs the final transcription which can take a moment
         // (especially for slower models like Whisper Medium/Large).
         DebugLogger.shared.debug("Showing transcription processing state", source: "ContentView")
         self.menuBarManager.setProcessing(true)
-        NotchOverlayManager.shared.updateTranscriptionText("Transcribing...")
+        NotchOverlayManager.shared.updateTranscriptionText("Transcribing")
 
         // Give SwiftUI a chance to render the processing state before we do heavier work
         // (ASR finalization + optional AI post-processing).
@@ -1728,6 +1799,10 @@ struct ContentView: View {
         // Stop the ASR service and wait for transcription to complete
         // The processing indicator will stay visible during this phase
         let transcribedText = await asr.stop()
+        DebugLogger.shared.info(
+            "Stop transcription result | chars=\(transcribedText.count) | empty=\(transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)",
+            source: "ContentView"
+        )
 
         // Reset the transcription text display after transcription completes
         NotchOverlayManager.shared.updateTranscriptionText("")
@@ -1736,6 +1811,7 @@ struct ContentView: View {
             DebugLogger.shared.debug("Transcription returned empty text", source: "ContentView")
             // Hide processing state when returning early
             self.menuBarManager.setProcessing(false)
+            NotchOverlayManager.shared.hide()
             return
         }
 
@@ -1759,10 +1835,18 @@ struct ContentView: View {
                 promptTest.isProcessing = false
             }
 
-            let result = await self.processTextWithAI(transcribedText, overrideSystemPrompt: promptTest.draftPromptText)
-            let finalText = ASRService.applyGAAVFormatting(result)
-            promptTest.lastOutputText = finalText
+            do {
+                let result = try await self.processTextWithAI(transcribedText, overrideSystemPrompt: promptTest.draftPromptText)
+                promptTest.lastOutputText = ASRService.applyGAAVFormatting(result)
+            } catch {
+                DebugLogger.shared.error("Prompt test AI call failed: \(error.localizedDescription)", source: "ContentView")
+                promptTest.lastError = error.localizedDescription
+            }
             return
+        }
+
+        if NotchOverlayManager.shared.isBottomOverlayVisible {
+            BottomOverlayWindowController.shared.beginReleaseTransition()
         }
 
         // If this was a rewrite recording, process the rewrite instead of typing
@@ -1797,6 +1881,7 @@ struct ContentView: View {
         }
 
         var finalText: String
+        var aiFallbackReason: String?
 
         let shouldUseAI = activeDictationSlot.map { DictationAIPostProcessingGate.isConfigured(for: $0) } ??
             DictationAIPostProcessingGate.isConfigured()
@@ -1809,16 +1894,28 @@ struct ContentView: View {
             let postProcessingStart = Date()
 
             // Update overlay text to show we're now refining (processing already true)
-            NotchOverlayManager.shared.updateTranscriptionText("Refining...")
+            NotchOverlayManager.shared.updateTranscriptionText("Refining")
 
             // Ensure the status label becomes visible immediately.
             await Task.yield()
 
-            finalText = await self.processTextWithAI(
-                transcribedText,
-                overrideSystemPrompt: promptOverride,
-                dictationSlot: activeDictationSlot
-            )
+            do {
+                finalText = try await self.processTextWithAI(
+                    transcribedText,
+                    overrideSystemPrompt: promptOverride,
+                    dictationSlot: activeDictationSlot
+                )
+            } catch {
+                // Fall back to the raw transcription so the user still gets
+                // their words typed instead of an error string.
+                DebugLogger.shared.error(
+                    "AI post-processing failed, falling back to raw transcription: \(error.localizedDescription)",
+                    source: "ContentView"
+                )
+                aiFallbackReason = error.localizedDescription
+                NotificationService.showAIProcessingFallback(error: error.localizedDescription)
+                finalText = transcribedText
+            }
             let postProcessingLatencyMs = Int((Date().timeIntervalSince(postProcessingStart) * 1000).rounded())
             AnalyticsService.shared.capture(
                 .dictationPostProcessingCompleted,
@@ -1882,7 +1979,8 @@ struct ContentView: View {
                 rawText: transcribedText,
                 processedText: finalText,
                 appName: appInfo.name,
-                windowTitle: appInfo.windowTitle
+                windowTitle: appInfo.windowTitle,
+                aiProcessingError: aiFallbackReason
             )
         }
 
@@ -1958,6 +2056,10 @@ struct ContentView: View {
                     "method": AnalyticsOutputMethod.historyOnly.rawValue,
                 ]
             )
+        }
+
+        if !didTypeExternally {
+            NotchOverlayManager.shared.hide()
         }
     }
 
@@ -2092,9 +2194,20 @@ struct ContentView: View {
         await Task.yield()
 
         var finalText = transcribedText
+        var aiFallbackReason: String?
         let shouldUseAI = DictationAIPostProcessingGate.isConfigured()
         if shouldUseAI {
-            finalText = await self.processTextWithAI(transcribedText)
+            do {
+                finalText = try await self.processTextWithAI(transcribedText)
+            } catch {
+                DebugLogger.shared.error(
+                    "AI reprocess failed, falling back to raw transcription: \(error.localizedDescription)",
+                    source: "ContentView"
+                )
+                aiFallbackReason = error.localizedDescription
+                NotificationService.showAIProcessingFallback(error: error.localizedDescription)
+                finalText = transcribedText
+            }
         }
 
         NotchOverlayManager.shared.updateTranscriptionText("")
@@ -2108,7 +2221,8 @@ struct ContentView: View {
                 rawText: transcribedText,
                 processedText: finalText,
                 appName: appInfo.name,
-                windowTitle: appInfo.windowTitle
+                windowTitle: appInfo.windowTitle,
+                aiProcessingError: aiFallbackReason
             )
         }
 
@@ -2854,8 +2968,13 @@ extension ContentView {
         await MainActor.run { self.isCallingAI = true }
         defer { Task { await MainActor.run { isCallingAI = false } } }
 
-        let result = await processTextWithAI(aiInputText)
-        await MainActor.run { self.aiOutputText = result }
+        do {
+            let result = try await processTextWithAI(aiInputText)
+            await MainActor.run { self.aiOutputText = result }
+        } catch {
+            DebugLogger.shared.error("callOpenAIChat failed: \(error.localizedDescription)", source: "ContentView")
+            await MainActor.run { self.aiOutputText = "Error: \(error.localizedDescription)" }
+        }
     }
 
     private func getModelStatusText() -> String {
@@ -2991,6 +3110,8 @@ extension ContentView {
         }
     }
 }
+
+// swiftlint:enable type_body_length
 
 private extension ContentView {
     func reloadSettingsStateAfterBackupRestore() {

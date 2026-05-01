@@ -24,11 +24,22 @@ enum OverlayMode: String {
 final class NotchOverlayManager {
     static let shared = NotchOverlayManager()
 
-    private var notch: DynamicNotch<NotchExpandedView, NotchCompactLeadingView, NotchCompactTrailingView>?
+    struct NotchPresentationPolicy: Equatable {
+        let usesCompactPresentation: Bool
+        let showsPromptSelector: Bool
+        let showsStreamingPreview: Bool
+        let showsModeLabel: Bool
+        let allowsCommandExpansion: Bool
+        let allowsCommandActions: Bool
+        let allowsExpandedCommandOutput: Bool
+    }
+
+    private var notch: DynamicNotch<NotchExpandedView, NotchCompactLeadingView, NotchCompactTrailingView, NotchCompactBottomView>?
     private var commandOutputNotch: DynamicNotch<
         NotchCommandOutputExpandedView,
         NotchCompactLeadingView,
-        NotchCompactTrailingView
+        NotchCompactTrailingView,
+        EmptyView
     >?
     private var currentMode: OverlayMode = .dictation
 
@@ -114,7 +125,24 @@ final class NotchOverlayManager {
         return .notchBadge
     }
 
+    private(set) var currentNotchPresentationMode: SettingsStore.NotchPresentationMode = .standard
+    private(set) var currentNotchPresentationPolicy = NotchPresentationPolicy.standard
+    private(set) var currentScreenSupportsCompactPresentation = false
+    private var presentationPolicyScreen: NSScreen?
+    private static let transientOverlayStatusTexts: Set<String> = [
+        "Transcribing",
+        "Refining",
+        "Thinking",
+        "Working",
+        "Transcribing...",
+        "Refining...",
+        "Thinking...",
+        "Working...",
+        "Reprocessing...",
+    ]
+
     private init() {
+        self.refreshNotchPresentationPolicy()
         self.setupEscapeKeyMonitors()
     }
 
@@ -149,6 +177,8 @@ final class NotchOverlayManager {
     }
 
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        self.refreshNotchPresentationPolicy()
+
         // Don't show regular notch if expanded command output is visible
         if self.isCommandOutputExpanded {
             // Just store the publisher for later use
@@ -199,17 +229,18 @@ final class NotchOverlayManager {
 
         // Start monitoring active app changes (updates icon in real-time)
         ActiveAppMonitor.shared.startMonitoring()
+        let targetScreen = OverlayScreenResolver.screenForCurrentPointer()
 
         let presentation = Self.liveOverlayPresentation(
             overlayPosition: SettingsStore.shared.overlayPosition,
-            activeScreenHasHardwareNotch: self.activeScreenHasHardwareNotch()
+            activeScreenHasHardwareNotch: self.screenHasHardwareNotch(targetScreen)
         )
 
         switch presentation {
         case .bottomOverlay:
             self.showBottomOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode)
         case .notchOverlay:
-            self.showNotchOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode)
+            self.showNotchOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode, screen: targetScreen)
         }
     }
 
@@ -231,8 +262,13 @@ final class NotchOverlayManager {
     private func showNotchOverlay(
         audioLevelPublisher: AnyPublisher<CGFloat, Never>,
         mode: OverlayMode,
+        screen: NSScreen?,
         initiallyCompact: Bool = false
     ) {
+        let targetScreen = screen ?? self.preferredPresentationScreen()
+        self.presentationPolicyScreen = targetScreen
+        self.refreshNotchPresentationPolicy(for: targetScreen)
+        self.currentAudioPublisher = audioLevelPublisher
         // Hide bottom overlay if it was visible
         if self.isBottomOverlayVisible {
             BottomOverlayWindowController.shared.hide()
@@ -253,28 +289,30 @@ final class NotchOverlayManager {
 
         // Create notch with SwiftUI views
         let newNotch = DynamicNotch(
-            hoverBehavior: [.keepVisible, .hapticFeedback],
+            hoverBehavior: [.keepVisible],
             style: .auto
         ) {
             NotchExpandedView(audioPublisher: audioLevelPublisher)
         } compactLeading: {
             NotchCompactLeadingView()
         } compactTrailing: {
-            NotchCompactTrailingView()
+            NotchCompactTrailingView(audioPublisher: audioLevelPublisher)
+        } compactBottom: {
+            NotchCompactBottomView()
         }
 
         newNotch.transitionConfiguration = DynamicNotchTransitionConfiguration(skipIntermediateHides: true)
 
         self.notch = newNotch
+        let shouldUseCompactPresentation = self.currentNotchPresentationPolicy.usesCompactPresentation
 
-        // Show in expanded state
+        // Resolve presentation from policy so future notch modes don't require call-site changes.
         Task { [weak self] in
-            if initiallyCompact {
-                await newNotch.compact()
+            if initiallyCompact || shouldUseCompactPresentation {
+                await newNotch.compact(on: targetScreen)
             } else {
-                await newNotch.expand()
+                await newNotch.expand(on: targetScreen)
             }
-
             // Only update state if we're still the active generation
             guard let self = self, self.generation == currentGeneration else { return }
 
@@ -344,6 +382,8 @@ final class NotchOverlayManager {
     }
 
     func setMode(_ mode: OverlayMode) {
+        self.refreshNotchPresentationPolicy()
+
         // Always update NotchContentState to ensure UI stays in sync
         // (can get out of sync during show/hide transitions)
         let normalized = self.normalizedOverlayMode(mode)
@@ -365,6 +405,15 @@ final class NotchOverlayManager {
     }
 
     func updateTranscriptionText(_ text: String) {
+        guard self.shouldShowOrTrackLivePreviewText else {
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedText.isEmpty || Self.transientOverlayStatusTexts.contains(trimmedText) {
+                NotchContentState.shared.updateTranscription(text)
+            } else if !NotchContentState.shared.transcriptionText.isEmpty {
+                NotchContentState.shared.updateTranscription("")
+            }
+            return
+        }
         NotchContentState.shared.updateTranscription(text)
     }
 
@@ -435,6 +484,7 @@ final class NotchOverlayManager {
             self.showNotchOverlay(
                 audioLevelPublisher: badgePublisher,
                 mode: .command,
+                screen: self.activeScreenForCompletionFeedback(),
                 initiallyCompact: true
             )
         }
@@ -450,7 +500,11 @@ final class NotchOverlayManager {
                 guard !Task.isCancelled else { return }
 
                 if let currentNotch = self.notch {
-                    await currentNotch.compact()
+                    if let screen = self.activeScreenForCompletionFeedback() {
+                        await currentNotch.compact(on: screen)
+                    } else {
+                        await currentNotch.compact()
+                    }
                     guard !Task.isCancelled else { return }
 
                     if currentNotch.windowController?.window != nil {
@@ -497,12 +551,19 @@ final class NotchOverlayManager {
         return NSScreen.main ?? NSScreen.screens.first
     }
 
+    private func screenHasHardwareNotch(_ screen: NSScreen?) -> Bool {
+        guard let screen else { return false }
+        return self.screenHasHardwareNotch(screen)
+    }
+
     private func screenHasHardwareNotch(_ screen: NSScreen) -> Bool {
         screen.auxiliaryTopLeftArea?.width != nil && screen.auxiliaryTopRightArea?.width != nil
     }
 
     /// Show expanded command output notch
     func showExpandedCommandOutput() {
+        guard self.canShowExpandedCommandOutput else { return }
+
         self.clearCommandCompletionBadgeState()
 
         // Hide any recording overlay first (regular notch or bottom overlay).
@@ -520,6 +581,7 @@ final class NotchOverlayManager {
     }
 
     private func showExpandedCommandOutputInternal() async {
+        guard self.canShowExpandedCommandOutput else { return }
         guard self.commandOutputState == .idle else { return }
 
         self.commandOutputGeneration &+= 1
@@ -547,37 +609,47 @@ final class NotchOverlayManager {
                     }
                 },
                 onSubmit: { [weak self] text in
-                    await self?.onCommandFollowUp?(text)
+                    guard let self, self.allowsCommandNotchActions else { return }
+                    await self.onCommandFollowUp?(text)
                 },
                 onNewChat: { [weak self] in
                     Task { @MainActor in
-                        self?.onNewChat?()
+                        guard let self, self.allowsCommandNotchActions else { return }
+                        self.onNewChat?()
                         // Refresh recent chats in notch state
                         NotchContentState.shared.refreshRecentChats()
                     }
                 },
                 onSwitchChat: { [weak self] chatID in
                     Task { @MainActor in
-                        self?.onSwitchChat?(chatID)
+                        guard let self, self.allowsCommandNotchActions else { return }
+                        self.onSwitchChat?(chatID)
                         // Refresh recent chats in notch state
                         NotchContentState.shared.refreshRecentChats()
                     }
                 },
                 onClearChat: { [weak self] in
                     Task { @MainActor in
-                        self?.onClearChat?()
+                        guard let self, self.allowsCommandNotchActions else { return }
+                        self.onClearChat?()
                     }
                 }
             )
         } compactLeading: {
             NotchCompactLeadingView()
         } compactTrailing: {
-            NotchCompactTrailingView()
+            NotchCompactTrailingView(audioPublisher: publisher)
+        } compactBottom: {
+            EmptyView()
         }
 
         self.commandOutputNotch = newNotch
 
-        await newNotch.expand()
+        if let screen = self.presentationPolicyScreen ?? OverlayScreenResolver.screenForCurrentPointer() {
+            await newNotch.expand(on: screen)
+        } else {
+            await newNotch.expand()
+        }
 
         guard self.commandOutputGeneration == currentGeneration else { return }
         self.commandOutputState = .visible
@@ -637,10 +709,61 @@ final class NotchOverlayManager {
     func toggleExpandedCommandOutput() {
         if self.isCommandOutputExpanded {
             self.hideExpandedCommandOutput()
-        } else if NotchContentState.shared.commandConversationHistory.isEmpty == false {
+        } else if self.canShowExpandedCommandOutput,
+                  NotchContentState.shared.commandConversationHistory.isEmpty == false
+        {
             // Only show if there's history to show
             self.showExpandedCommandOutput()
         }
+    }
+
+    var canShowExpandedCommandOutput: Bool {
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.allowsExpandedCommandOutput
+    }
+
+    var canHandleNotchCommandTap: Bool {
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.allowsCommandExpansion &&
+            self.currentNotchPresentationPolicy.allowsCommandActions
+    }
+
+    var allowsCommandNotchActions: Bool {
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.allowsCommandActions
+    }
+
+    var supportsCommandNotchUI: Bool {
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.allowsCommandExpansion ||
+            self.currentNotchPresentationPolicy.allowsExpandedCommandOutput ||
+            self.currentNotchPresentationPolicy.allowsCommandActions
+    }
+
+    var shouldShowOrTrackLivePreviewText: Bool {
+        guard SettingsStore.shared.enableStreamingPreview else { return false }
+        if SettingsStore.shared.overlayPosition == .bottom {
+            return true
+        }
+
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.showsStreamingPreview
+    }
+
+    var shouldSyncCommandConversationToNotch: Bool {
+        if SettingsStore.shared.overlayPosition == .bottom {
+            return true
+        }
+
+        guard self.enableNotchFeatures else { return false }
+
+        self.refreshNotchPresentationPolicy()
+        return self.currentNotchPresentationPolicy.allowsExpandedCommandOutput ||
+            self.currentNotchPresentationPolicy.allowsCommandActions
+    }
+
+    private var enableNotchFeatures: Bool {
+        SettingsStore.shared.overlayPosition == .top || self.supportsCommandNotchUI
     }
 
     /// Check if any notch (regular or expanded) is visible
@@ -652,5 +775,59 @@ final class NotchOverlayManager {
     func updateAudioPublisher(_ publisher: AnyPublisher<CGFloat, Never>) {
         self.lastAudioPublisher = publisher
         self.currentAudioPublisher = publisher
+    }
+
+    private func preferredPresentationScreen() -> NSScreen {
+        let mouseLocation = NSEvent.mouseLocation
+        if let screenUnderMouse = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
+            return screenUnderMouse
+        }
+        return NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    private func supportsCompactPresentation(on screen: NSScreen) -> Bool {
+        screen.auxiliaryTopLeftArea?.width != nil && screen.auxiliaryTopRightArea?.width != nil
+    }
+
+    private func refreshNotchPresentationPolicy(for screen: NSScreen? = nil) {
+        let mode = SettingsStore.shared.notchPresentationMode
+        self.currentNotchPresentationMode = mode
+        let resolvedScreen = screen ?? self.presentationPolicyScreen ?? self.preferredPresentationScreen()
+        self.currentScreenSupportsCompactPresentation = self.supportsCompactPresentation(on: resolvedScreen)
+        self.currentNotchPresentationPolicy = .forMode(
+            mode,
+            supportsCompactPresentation: self.currentScreenSupportsCompactPresentation
+        )
+    }
+}
+
+private extension NotchOverlayManager.NotchPresentationPolicy {
+    static let standard = Self(
+        usesCompactPresentation: false,
+        showsPromptSelector: true,
+        showsStreamingPreview: true,
+        showsModeLabel: true,
+        allowsCommandExpansion: true,
+        allowsCommandActions: true,
+        allowsExpandedCommandOutput: true
+    )
+
+    static let minimal = Self(
+        usesCompactPresentation: true,
+        showsPromptSelector: false,
+        showsStreamingPreview: true,
+        showsModeLabel: true,
+        allowsCommandExpansion: false,
+        allowsCommandActions: false,
+        allowsExpandedCommandOutput: false
+    )
+
+    static func forMode(_ mode: SettingsStore.NotchPresentationMode, supportsCompactPresentation: Bool) -> Self {
+        switch mode {
+        case .standard:
+            return .standard
+        case .minimal:
+            return supportsCompactPresentation ? .minimal : .standard
+        }
     }
 }

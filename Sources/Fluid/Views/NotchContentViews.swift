@@ -5,8 +5,10 @@
 //  Created by Assistant
 //
 
+import AppKit
 import Combine
 import MarkdownUI
+import QuartzCore
 import SwiftUI
 
 // MARK: - Observable state for notch content (Singleton)
@@ -161,6 +163,9 @@ class NotchContentState: ObservableObject {
     // MARK: - Bottom Overlay Audio Level
 
     @Published var bottomOverlayAudioLevel: CGFloat = 0 // Audio level for bottom overlay waveform
+    @Published var isBottomOverlayReleaseTransitioning: Bool = false
+    @Published var isBottomOverlayDismissing: Bool = false
+    @Published var bottomOverlayDismissOffsetY: CGFloat = 8
 
     /// Called when the user requests a live mode switch from the prompt picker tabs.
     var onPromptModeSwitchRequested: ((SettingsStore.PromptMode) -> Void)?
@@ -189,6 +194,22 @@ class NotchContentState: ObservableObject {
     func updateExpandedModeAudioLevel(_ level: CGFloat) {
         guard self.isRecordingInExpandedMode else { return }
         self.expandedModeAudioLevel = level
+    }
+
+    func setBottomOverlayReleaseTransitioning(_ transitioning: Bool) {
+        guard self.isBottomOverlayReleaseTransitioning != transitioning else { return }
+        self.isBottomOverlayReleaseTransitioning = transitioning
+    }
+
+    func setBottomOverlayDismissing(_ dismissing: Bool) {
+        guard self.isBottomOverlayDismissing != dismissing else { return }
+        self.isBottomOverlayDismissing = dismissing
+    }
+
+    func setBottomOverlayDismissOffsetY(_ offset: CGFloat) {
+        let normalizedOffset = max(offset, 8)
+        guard abs(self.bottomOverlayDismissOffsetY - normalizedOffset) > 0.5 else { return }
+        self.bottomOverlayDismissOffsetY = normalizedOffset
     }
 
     // MARK: - Command Output Methods
@@ -281,34 +302,114 @@ struct ShimmerText: View {
     let color: Color
     var font: Font = .system(size: 9, weight: .medium)
 
-    /// Seconds per shimmer sweep.
-    /// Lower is faster.
-    private let periodSeconds: Double = 0.85
-    private let bandHalfWidth: CGFloat = 0.32
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            let progress = (t / self.periodSeconds).truncatingRemainder(dividingBy: 1.0)
-            // Sweep from slightly before to slightly after to avoid hard edges.
-            let centerX = CGFloat(-0.25 + progress * 1.5) // -0.25 -> 1.25
+        Text(self.text)
+            .font(self.font)
+            .foregroundStyle(self.color.opacity(0.35))
+            .overlay {
+                CompositorShimmerSweep(duration: 0.72, peakOpacity: 0.9)
+                    .mask {
+                        Text(self.text)
+                            .font(self.font)
+                    }
+            }
+    }
+}
 
-            Text(self.text)
-                .font(self.font)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [
-                            self.color.opacity(0.35),
-                            self.color.opacity(0.35),
-                            self.color.opacity(1.0),
-                            self.color.opacity(0.35),
-                            self.color.opacity(0.35),
-                        ],
-                        startPoint: UnitPoint(x: centerX - self.bandHalfWidth, y: 0.5),
-                        endPoint: UnitPoint(x: centerX + self.bandHalfWidth, y: 0.5)
-                    )
-                )
+struct CompositorShimmerSweep: NSViewRepresentable {
+    var duration: CFTimeInterval = 1.0
+    var peakOpacity: CGFloat = 0.88
+
+    func makeNSView(context: Context) -> CompositorShimmerSweepView {
+        let view = CompositorShimmerSweepView()
+        view.configure(duration: self.duration, peakOpacity: self.peakOpacity)
+        return view
+    }
+
+    func updateNSView(_ nsView: CompositorShimmerSweepView, context: Context) {
+        nsView.configure(duration: self.duration, peakOpacity: self.peakOpacity)
+    }
+}
+
+final class CompositorShimmerSweepView: NSView {
+    private let gradientLayer = CAGradientLayer()
+    private var animationDuration: CFTimeInterval = 1.0
+    private var peakOpacity: CGFloat = 0.88
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.wantsLayer = true
+
+        let backingLayer = CALayer()
+        backingLayer.masksToBounds = true
+        self.layer = backingLayer
+
+        self.gradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        self.gradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        self.gradientLayer.locations = [-0.45, -0.15, 0.15]
+        backingLayer.addSublayer(self.gradientLayer)
+        self.updateColors()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.gradientLayer.frame = self.bounds
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if self.window == nil {
+            self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
+        } else {
+            self.startAnimationIfNeeded()
         }
+    }
+
+    func configure(duration: CFTimeInterval, peakOpacity: CGFloat) {
+        let clampedDuration = max(duration, 0.2)
+        let clampedOpacity = min(max(peakOpacity, 0.0), 1.0)
+        let shouldRestart = abs(self.animationDuration - clampedDuration) > 0.01
+        let shouldUpdateColors = abs(self.peakOpacity - clampedOpacity) > 0.01
+
+        self.animationDuration = clampedDuration
+        self.peakOpacity = clampedOpacity
+        if shouldUpdateColors {
+            self.updateColors()
+        }
+        if shouldRestart {
+            self.startAnimationIfNeeded()
+        }
+    }
+
+    private func updateColors() {
+        self.gradientLayer.colors = [
+            NSColor.white.withAlphaComponent(0).cgColor,
+            NSColor.white.withAlphaComponent(self.peakOpacity).cgColor,
+            NSColor.white.withAlphaComponent(0).cgColor,
+        ]
+    }
+
+    private func startAnimationIfNeeded() {
+        guard self.window != nil else { return }
+        self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
+
+        let animation = CABasicAnimation(keyPath: "locations")
+        animation.fromValue = [-0.45, -0.15, 0.15]
+        animation.toValue = [0.85, 1.15, 1.45]
+        animation.duration = self.animationDuration
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.isRemovedOnCompletion = false
+
+        self.gradientLayer.add(animation, forKey: "fluid.shimmer.locations")
     }
 }
 
@@ -320,43 +421,64 @@ struct NotchExpandedView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
     @Environment(\.theme) private var theme
+    @State private var isHoveringPromptChip = false
+    @State private var isHoveringPromptMenu = false
+    @State private var hoveredPromptMenuRowID: String?
     @State private var showPromptHoverMenu = false
-    @State private var promptHoverWorkItem: DispatchWorkItem?
+    @State private var promptHoverGeneration: UInt64 = 0
+    @State private var promptSelectorLeading: CGFloat = 0
 
     private var modeColor: Color {
         self.contentState.mode.notchColor
     }
 
-    private var modeLabel: String {
-        switch self.contentState.mode {
-        case .dictation: return "Dictate"
-        case .edit, .rewrite, .write: return "Edit"
-        case .command: return "Command"
-        }
+    private var presentationPolicy: NotchOverlayManager.NotchPresentationPolicy {
+        NotchOverlayManager.shared.currentNotchPresentationPolicy
     }
 
     private var processingLabel: String {
         switch self.contentState.mode {
-        case .dictation: return "Refining..."
-        case .edit, .rewrite, .write: return "Thinking..."
-        case .command: return "Working..."
+        case .dictation: return "Transcribing"
+        case .edit, .rewrite, .write: return "Thinking"
+        case .command: return "Working"
         }
     }
+
+    private static let transientOverlayStatusTexts: Set<String> = [
+        "Transcribing",
+        "Refining",
+        "Thinking",
+        "Working",
+        "Transcribing...",
+        "Refining...",
+        "Thinking...",
+        "Working...",
+    ]
 
     /// ContentView writes transient status strings into transcriptionText while processing
     /// (e.g. "Transcribing...", "Refining..."). Prefer that when present.
     private var processingStatusText: String {
         let t = self.contentState.transcriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? self.processingLabel : t
+        guard Self.transientOverlayStatusTexts.contains(t) else { return self.processingLabel }
+        return t
     }
 
     private var hasTranscription: Bool {
-        !self.contentState.transcriptionText.isEmpty
+        !self.visiblePreviewText.isEmpty
+    }
+
+    private var visiblePreviewText: String {
+        let previewText = self.contentState.cachedPreviewText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !Self.transientOverlayStatusTexts.contains(previewText) else { return "" }
+        return previewText
     }
 
     /// Check if there's command history that can be expanded
     private var canExpandCommandHistory: Bool {
-        self.contentState.mode == .command && !self.contentState.commandConversationHistory.isEmpty
+        self.presentationPolicy.allowsCommandExpansion &&
+            self.presentationPolicy.allowsCommandActions &&
+            self.contentState.mode == .command &&
+            !self.contentState.commandConversationHistory.isEmpty
     }
 
     private var normalizedOverlayMode: OverlayMode {
@@ -425,6 +547,12 @@ struct NotchExpandedView: View {
         return "Default"
     }
 
+    private var compactPromptLabel: String {
+        let label = self.selectedPromptLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard label.count > 7 else { return label }
+        return String(label.prefix(7))
+    }
+
     private var previewMaxHeight: CGFloat {
         60
     }
@@ -433,209 +561,347 @@ struct NotchExpandedView: View {
         180
     }
 
-    private func handlePromptHover(_ hovering: Bool) {
+    private var promptSelectorFixedWidth: CGFloat {
+        52
+    }
+
+    private var promptMenuWidth: CGFloat {
+        self.promptSelectorFixedWidth
+    }
+
+    private var promptMenuRowVerticalPadding: CGFloat {
+        4
+    }
+
+    private var promptMenuMaxVisibleRows: CGFloat {
+        3
+    }
+
+    private var promptMenuRowHeight: CGFloat {
+        21
+    }
+
+    private var promptMenuListMaxHeight: CGFloat {
+        self.promptMenuRowHeight * self.promptMenuMaxVisibleRows
+    }
+
+    private static let notchContentCoordinateSpace = "NotchExpandedContent"
+
+    private var notchContentWidth: CGFloat {
+        176
+    }
+
+    @ViewBuilder
+    private var appIconView: some View {
+        if let appIcon = self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon {
+            Image(nsImage: appIcon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 18, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+    }
+
+    private func updatePromptMenuVisibility() {
         guard self.isPromptSelectableMode, !self.contentState.isProcessing else {
-            self.showPromptHoverMenu = false
+            self.dismissPromptHoverMenu()
             return
         }
-        self.promptHoverWorkItem?.cancel()
-        let task = DispatchWorkItem {
-            self.showPromptHoverMenu = hovering
+
+        let shouldShow = self.isHoveringPromptChip || self.isHoveringPromptMenu
+        self.promptHoverGeneration &+= 1
+        let generation = self.promptHoverGeneration
+        let delay = shouldShow ? 0.03 : 0.28
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard generation == self.promptHoverGeneration else { return }
+            self.showPromptHoverMenu = shouldShow
         }
-        self.promptHoverWorkItem = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + (hovering ? 0.05 : 0.15), execute: task)
+    }
+
+    private func dismissPromptHoverMenu() {
+        self.promptHoverGeneration &+= 1
+        self.isHoveringPromptChip = false
+        self.isHoveringPromptMenu = false
+        self.hoveredPromptMenuRowID = nil
+        self.showPromptHoverMenu = false
+    }
+
+    private func handlePromptChipHover(_ hovering: Bool) {
+        self.isHoveringPromptChip = hovering
+        self.updatePromptMenuVisibility()
+    }
+
+    private func handlePromptMenuHover(_ hovering: Bool) {
+        self.isHoveringPromptMenu = hovering
+        self.updatePromptMenuVisibility()
+    }
+
+    private func restoreRecordingTargetFocus() {
+        let pid = NotchContentState.shared.recordingTargetPID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if let pid { _ = TypingService.activateApp(pid: pid) }
+        }
+    }
+
+    private func promptMenuRowBackground(isSelected: Bool, rowID: String) -> some View {
+        let isHovered = self.hoveredPromptMenuRowID == rowID
+        let fillColor: Color
+        if isSelected {
+            fillColor = Color.white.opacity(0.18)
+        } else if isHovered {
+            fillColor = Color.white.opacity(0.10)
+        } else {
+            fillColor = .clear
+        }
+
+        let strokeColor: Color
+        if isSelected {
+            strokeColor = Color.white.opacity(0.24)
+        } else if isHovered {
+            strokeColor = Color.white.opacity(0.14)
+        } else {
+            strokeColor = .clear
+        }
+
+        return RoundedRectangle(cornerRadius: 7)
+            .fill(fillColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(strokeColor, lineWidth: 1)
+            )
+    }
+
+    @ViewBuilder
+    private func promptMenuRow(
+        _ title: String,
+        rowID: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(.white.opacity(isSelected ? 0.96 : 0.84))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 6)
+                .padding(.vertical, self.promptMenuRowVerticalPadding)
+                .background(self.promptMenuRowBackground(isSelected: isSelected, rowID: rowID))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            self.hoveredPromptMenuRowID = hovering ? rowID : nil
+        }
     }
 
     private func promptMenuContent() -> some View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("AI Prompt")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.42))
+                .padding(.horizontal, 6)
+                .padding(.top, 2)
+                .padding(.bottom, 3)
 
-        return VStack(alignment: .leading, spacing: 0) {
-            if promptMode.normalized == .dictate {
-                Button(action: {
-                    self.contentState.onDictationPromptSelectionRequested?(.off)
-                    let pid = NotchContentState.shared.recordingTargetPID
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        if let pid { _ = TypingService.activateApp(pid: pid) }
-                    }
-                    self.showPromptHoverMenu = false
-                }) {
-                    HStack {
-                        Text("Off")
-                        Spacer()
-                        let isSelected = self.settings.dictationPromptSelection(for: activeDictationSlot) == .off
-                        if isSelected {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .semibold))
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.vertical, 4)
-
-                Divider()
-                    .padding(.vertical, 4)
-            }
-
-            Button(action: {
-                if promptMode.normalized == .dictate {
-                    self.contentState.onDictationPromptSelectionRequested?(.default)
-                } else {
-                    self.settings.setSelectedPromptID(nil, for: promptMode)
-                }
-                let pid = NotchContentState.shared.recordingTargetPID
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    if let pid { _ = TypingService.activateApp(pid: pid) }
-                }
-                self.showPromptHoverMenu = false
-            }) {
-                HStack {
-                    Text("Default")
-                    Spacer()
-                    let isSelected = promptMode.normalized == .dictate
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 2) {
+                    let defaultSelected = promptMode.normalized == .dictate
                         ? (self.settings.dictationPromptSelection(for: activeDictationSlot) == .default)
                         : (self.settings.selectedPromptID(for: promptMode) == nil)
-                    if isSelected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .semibold))
+
+                    if promptMode.normalized == .dictate {
+                        self.promptMenuRow(
+                            "Off",
+                            rowID: "off",
+                            isSelected: self.settings.dictationPromptSelection(for: activeDictationSlot) == .off
+                        ) {
+                            self.contentState.onDictationPromptSelectionRequested?(.off)
+                            self.restoreRecordingTargetFocus()
+                            self.dismissPromptHoverMenu()
+                        }
                     }
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 4)
 
-            if !self.settings.promptProfiles(for: promptMode).isEmpty {
-                Divider()
-                    .padding(.vertical, 4)
-
-                ForEach(self.settings.promptProfiles(for: promptMode)) { profile in
-                    Button(action: {
+                    self.promptMenuRow("Default", rowID: "default", isSelected: defaultSelected) {
                         if promptMode.normalized == .dictate {
-                            self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))
+                            self.contentState.onDictationPromptSelectionRequested?(.default)
                         } else {
-                            self.settings.setSelectedPromptID(profile.id, for: promptMode)
+                            self.settings.setSelectedPromptID(nil, for: promptMode)
                         }
-                        let pid = NotchContentState.shared.recordingTargetPID
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            if let pid { _ = TypingService.activateApp(pid: pid) }
-                        }
-                        self.showPromptHoverMenu = false
-                    }) {
-                        HStack {
-                            Text(profile.name.isEmpty ? "Untitled" : profile.name)
-                            Spacer()
+                        self.restoreRecordingTargetFocus()
+                        self.dismissPromptHoverMenu()
+                    }
+
+                    let profiles = self.settings.promptProfiles(for: promptMode)
+                    if !profiles.isEmpty {
+                        ForEach(profiles) { profile in
                             let isSelected = promptMode.normalized == .dictate
                                 ? (self.settings.dictationPromptSelection(for: activeDictationSlot) == .profile(profile.id))
                                 : (self.settings.selectedPromptID(for: promptMode) == profile.id)
-                            if isSelected {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
+                            self.promptMenuRow(
+                                profile.name.isEmpty ? "Untitled" : profile.name,
+                                rowID: profile.id,
+                                isSelected: isSelected
+                            ) {
+                                if promptMode.normalized == .dictate {
+                                    self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))
+                                } else {
+                                    self.settings.setSelectedPromptID(profile.id, for: promptMode)
+                                }
+                                self.restoreRecordingTargetFocus()
+                                self.dismissPromptHoverMenu()
                             }
                         }
                     }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 4)
                 }
             }
+            .frame(maxHeight: self.promptMenuListMaxHeight)
         }
-        .font(.system(size: 9, weight: .medium))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .foregroundStyle(.white)
+        .padding(3)
         .background(Color.black)
-        .cornerRadius(8)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 9)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.24), radius: 8, x: 0, y: 5)
         .onHover { hovering in
-            self.handlePromptHover(hovering)
+            self.handlePromptMenuHover(hovering)
+        }
+    }
+
+    @ViewBuilder
+    private var promptSelectorControl: some View {
+        if self.presentationPolicy.showsPromptSelector {
+            HStack(spacing: 3) {
+                Text(self.compactPromptLabel)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(self.isHoveringPromptChip ? .white.opacity(0.94) : .white.opacity(0.86))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(self.isHoveringPromptChip ? .white.opacity(0.78) : .white.opacity(0.62))
+                if self.isAppPromptOverrideActive {
+                    Text("App")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.12))
+                        )
+                }
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .frame(width: self.promptSelectorFixedWidth, alignment: .leading)
+            .background(
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.black.opacity(self.isHoveringPromptChip ? 0.96 : 0.92),
+                                Color(white: self.isHoveringPromptChip ? 0.10 : 0.06),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            )
+            .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 4)
+            .shadow(color: .white.opacity(self.isHoveringPromptChip ? 0.06 : 0.03), radius: 0, x: 0, y: 1)
+            .opacity(self.isPromptSelectableMode ? (self.contentState.isProcessing ? 0.7 : 1.0) : 0.6)
+            .allowsHitTesting(self.isPromptSelectableMode && !self.contentState.isProcessing)
+            .onHover { hovering in
+                self.handlePromptChipHover(hovering)
+            }
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear {
+                            self.promptSelectorLeading = geometry.frame(in: .named(Self.notchContentCoordinateSpace)).minX
+                        }
+                        .onChange(of: geometry.frame(in: .named(Self.notchContentCoordinateSpace)).minX) { _, newLeading in
+                            self.promptSelectorLeading = newLeading
+                        }
+                }
+            )
+            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private var promptHoverMenuRow: some View {
+        if self.showPromptHoverMenu {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: self.promptSelectorLeading)
+
+                self.promptMenuContent()
+                    .frame(width: self.promptMenuWidth, alignment: .leading)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, -2)
+            .transition(.opacity)
         }
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            // Visualization + Mode label row
-            HStack(spacing: 6) {
-                // Target app icon (the app where text will be typed)
-                if let appIcon = self.contentState.targetAppIcon {
-                    Image(nsImage: appIcon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 16, height: 16)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                }
+        Group {
+            if self.canExpandCommandHistory {
+                self.notchBodyContent
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if NotchOverlayManager.shared.canHandleNotchCommandTap {
+                            NotchOverlayManager.shared.onNotchClicked?()
+                        }
+                    }
+            } else {
+                self.notchBodyContent
+            }
+        }
+        .onChange(of: self.contentState.mode) { _, _ in
+            if !self.isPromptSelectableMode {
+                self.dismissPromptHoverMenu()
+            }
+            switch self.contentState.mode {
+            case .dictation: self.contentState.promptPickerMode = .dictate
+            case .edit, .write, .rewrite: self.contentState.promptPickerMode = .edit
+            case .command: break
+            }
+        }
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.hasTranscription)
+        .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
+        .animation(.easeInOut(duration: 0.25), value: self.contentState.isProcessing)
+    }
 
-                NotchWaveformView(
+    private var notchBodyContent: some View {
+        VStack(alignment: .center, spacing: 6) {
+            HStack(spacing: 4) {
+                self.appIconView
+
+                CompactNotchWaveformView(
                     audioPublisher: self.audioPublisher,
                     color: self.modeColor
                 )
-                .frame(width: 80, height: 22)
+                .frame(width: 48, height: 18)
 
-                // Mode label - shimmer effect when processing
-                if self.contentState.isProcessing {
-                    ShimmerText(text: self.processingStatusText, color: self.modeColor)
-                } else {
-                    Text(self.modeLabel)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(self.modeColor)
-                        .opacity(0.9)
-                        .onHover { hovering in
-                            self.handlePromptHover(hovering)
-                        }
-                }
+                self.promptSelectorControl
             }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .offset(x: 4, y: 0)
 
-            // Prompt selector
-            if !self.contentState.isProcessing {
-                ZStack(alignment: .top) {
-                    HStack(spacing: 6) {
-                        Text("AI Prompt:")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.5))
-                        Text(self.selectedPromptLabel)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(1)
-                        if self.isAppPromptOverrideActive {
-                            Text("App")
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.white.opacity(0.15))
-                                )
-                        }
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.00))
-                    .cornerRadius(6)
-                    .opacity(self.isPromptSelectableMode ? 1.0 : 0.6)
-                    .onTapGesture {
-                        guard self.isPromptSelectableMode, !self.contentState.isProcessing else { return }
-                        self.showPromptHoverMenu.toggle()
-                    }
+            self.promptHoverMenuRow
 
-                    if self.showPromptHoverMenu {
-                        self.promptMenuContent()
-                            .padding(.top, 26)
-                            .transition(.opacity)
-                            .zIndex(10)
-                    }
-                }
-                .frame(maxWidth: 180, alignment: .top)
-                .transition(.opacity)
-            }
-
-            // Transcription preview (wrapped, fixed width)
-            if self.hasTranscription && !self.contentState.isProcessing {
-                let previewText = self.contentState.cachedPreviewText
+            if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
+                let previewText = self.visiblePreviewText
                 if !previewText.isEmpty {
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: false) {
@@ -662,34 +928,17 @@ struct NotchExpandedView: View {
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
         }
-        .frame(width: 216) // Fixed width prevents notch from resizing and causing edge artifacts
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color.black) // Must be pure black to blend with macOS notch
-        .contentShape(Rectangle()) // Make entire area tappable
-        .onTapGesture {
-            // If in command mode with history, clicking opens Command Mode in-app.
-            if self.canExpandCommandHistory {
-                NotchOverlayManager.shared.onNotchClicked?()
-            }
-        }
-        .onChange(of: self.contentState.mode) { _, _ in
-            if !self.isPromptSelectableMode {
-                self.showPromptHoverMenu = false
-            }
-            switch self.contentState.mode {
-            case .dictation: self.contentState.promptPickerMode = .dictate
-            case .edit, .write, .rewrite: self.contentState.promptPickerMode = .edit
-            case .command: break
-            }
-        }
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.hasTranscription)
-        .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
-        .animation(.easeInOut(duration: 0.25), value: self.contentState.isProcessing)
+        .coordinateSpace(name: Self.notchContentCoordinateSpace)
+        .frame(width: self.notchContentWidth)
+        .padding(.horizontal, 6)
+        .padding(.top, 0)
+        .padding(.bottom, 4)
+        .background(Color.black)
     }
 }
 
@@ -701,14 +950,15 @@ struct NotchWaveformView: View {
 
     @StateObject private var data: AudioVisualizationData
     @ObservedObject private var contentState = NotchContentState.shared
-    @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 7)
+    @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 5)
     @State private var noiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
-    private let barCount = 7
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 4
+    private let barCount = 5
+    private let barWidth: CGFloat = 2.5
+    private let barSpacing: CGFloat = 2
     private let minHeight: CGFloat = 3
-    private let maxHeight: CGFloat = 20
+    private let maxHeight: CGFloat = 12
+    private let processingFlatHeight: CGFloat = 3
 
     private var currentGlowIntensity: CGFloat {
         self.contentState.isProcessing ? 0.0 : 0.35
@@ -729,13 +979,20 @@ struct NotchWaveformView: View {
     }
 
     var body: some View {
-        HStack(spacing: self.barSpacing) {
-            ForEach(0..<self.barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: self.barWidth / 2)
-                    .fill(self.color)
-                    .frame(width: self.barWidth, height: self.barHeights[index])
-                    .shadow(color: self.color.opacity(self.currentGlowIntensity), radius: self.currentGlowRadius, x: 0, y: 0)
-                    .shadow(color: self.color.opacity(self.currentGlowIntensity * 0.5), radius: self.currentOuterGlowRadius, x: 0, y: 0)
+        ZStack {
+            self.barsView(using: { index in
+                self.displayHeight(for: index)
+            })
+            .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
+
+            if self.contentState.isProcessing {
+                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    .mask {
+                        self.barsView(using: { index in
+                            self.displayHeight(for: index)
+                        })
+                    }
+                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
             }
         }
         .onChange(of: self.data.audioLevel) { _, level in
@@ -745,17 +1002,16 @@ struct NotchWaveformView: View {
         }
         .onChange(of: self.contentState.isProcessing) { _, processing in
             if processing {
-                self.setFlatProcessingBars()
+                self.resetBarsToBaseline(animated: false)
             } else {
-                // Resume from silence; next audio tick will animate up.
-                self.updateBars(level: 0)
+                self.updateBars(level: self.data.audioLevel)
             }
         }
         .onAppear {
             if self.contentState.isProcessing {
-                self.setFlatProcessingBars()
+                self.resetBarsToBaseline(animated: false)
             } else {
-                self.updateBars(level: 0)
+                self.updateBars(level: self.data.audioLevel)
             }
         }
         .onDisappear {
@@ -770,33 +1026,57 @@ struct NotchWaveformView: View {
         }
     }
 
-    private func setFlatProcessingBars() {
-        // During AI processing we want the visualizer to settle to silence (flat).
-        withAnimation(.easeOut(duration: 0.18)) {
-            for i in 0..<self.barCount {
-                self.barHeights[i] = self.minHeight
+    @ViewBuilder
+    private func barsView(using height: @escaping (Int) -> CGFloat) -> some View {
+        HStack(spacing: self.barSpacing) {
+            ForEach(0..<self.barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: self.barWidth / 2)
+                    .frame(width: self.barWidth, height: height(index))
+                    .shadow(color: self.color.opacity(self.currentGlowIntensity), radius: self.currentGlowRadius, x: 0, y: 0)
+                    .shadow(color: self.color.opacity(self.currentGlowIntensity * 0.5), radius: self.currentOuterGlowRadius, x: 0, y: 0)
             }
+        }
+    }
+
+    private func displayHeight(for index: Int) -> CGFloat {
+        guard self.contentState.isProcessing else {
+            return self.barHeights[index]
+        }
+        return self.processingFlatHeight
+    }
+
+    private func resetBarsToBaseline(animated: Bool) {
+        let update = {
+            for index in 0..<self.barCount {
+                self.barHeights[index] = self.minHeight
+            }
+        }
+
+        if animated {
+            withAnimation(.easeOut(duration: 0.1)) {
+                update()
+            }
+        } else {
+            update()
         }
     }
 
     private func updateBars(level: CGFloat) {
         let normalizedLevel = min(max(level, 0), 1)
-        let isActive = normalizedLevel > self.noiseThreshold // Use user's sensitivity setting
+        let adjustedLevel = normalizedLevel > self.noiseThreshold
+            ? (normalizedLevel - self.noiseThreshold) / (1.0 - self.noiseThreshold)
+            : 0
 
-        withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) {
-            for i in 0..<self.barCount {
-                let centerDistance = abs(CGFloat(i) - CGFloat(self.barCount - 1) / 2)
-                let centerFactor = 1.0 - (centerDistance / CGFloat(self.barCount / 2)) * 0.4
+        guard adjustedLevel > 0 else {
+            self.resetBarsToBaseline(animated: false)
+            return
+        }
 
-                if isActive {
-                    // Scale audio level relative to threshold for smoother response
-                    let adjustedLevel = (normalizedLevel - self.noiseThreshold) / (1.0 - self.noiseThreshold)
-                    let randomVariation = CGFloat.random(in: 0.7...1.0)
-                    self.barHeights[i] = self.minHeight + (self.maxHeight - self.minHeight) * adjustedLevel * centerFactor * randomVariation
-                } else {
-                    // Complete stillness when below threshold
-                    self.barHeights[i] = self.minHeight
-                }
+        withAnimation(.easeOut(duration: 0.1)) {
+            for index in 0..<self.barCount {
+                let centerDistance = abs(CGFloat(index) - CGFloat(self.barCount - 1) / 2)
+                let centerFactor = 1.0 - (centerDistance / CGFloat(self.barCount / 2)) * 0.28
+                self.barHeights[index] = self.minHeight + (self.maxHeight - self.minHeight) * adjustedLevel * centerFactor
             }
         }
     }
@@ -806,7 +1086,7 @@ struct NotchWaveformView: View {
 
 struct NotchCompactLeadingView: View {
     @ObservedObject private var contentState = NotchContentState.shared
-    @State private var isPulsing = false
+    @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
 
     private var isShowingCommandTurnBadge: Bool {
         self.contentState.commandTurnBadgeState != .hidden
@@ -823,22 +1103,24 @@ struct NotchCompactLeadingView: View {
                     .onTapGesture {
                         NotchOverlayManager.shared.onNotchClicked?()
                     }
+            } else if let appIcon = self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 16, height: 16)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
             } else {
-                Image(systemName: "waveform")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(self.contentState.mode.notchColor)
-                    .scaleEffect(self.isPulsing ? 1.1 : 1.0)
-                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: self.isPulsing)
-                    .onAppear { self.isPulsing = true }
-                    .onDisappear { self.isPulsing = false }
+                Circle()
+                    .fill(self.contentState.mode.notchColor.opacity(0.9))
+                    .frame(width: 8, height: 8)
             }
         }
     }
 }
 
 struct NotchCompactTrailingView: View {
+    let audioPublisher: AnyPublisher<CGFloat, Never>
     @ObservedObject private var contentState = NotchContentState.shared
-    @State private var isPulsing = false
 
     private var isShowingCommandTurnBadge: Bool {
         self.contentState.commandTurnBadgeState != .hidden
@@ -856,16 +1138,60 @@ struct NotchCompactTrailingView: View {
                         NotchOverlayManager.shared.onNotchClicked?()
                     }
             } else {
-                Circle()
-                    .fill(self.contentState.mode.notchColor)
-                    .frame(width: 5, height: 5)
-                    .opacity(self.isPulsing ? 0.5 : 1.0)
-                    .scaleEffect(self.isPulsing ? 0.85 : 1.0)
-                    .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: self.isPulsing)
-                    .onAppear { self.isPulsing = true }
-                    .onDisappear { self.isPulsing = false }
+                CompactNotchWaveformView(
+                    audioPublisher: self.audioPublisher,
+                    color: self.contentState.mode.notchColor
+                )
+                .frame(width: 34, height: 16)
             }
         }
+    }
+}
+
+struct NotchCompactBottomView: View {
+    @ObservedObject private var contentState = NotchContentState.shared
+
+    private let previewWidth: CGFloat = 250
+    private let previewHeight: CGFloat = 20
+    private static let transientOverlayStatusTexts: Set<String> = [
+        "Transcribing",
+        "Refining",
+        "Thinking",
+        "Working",
+        "Transcribing...",
+        "Refining...",
+        "Thinking...",
+        "Working...",
+    ]
+
+    private var compactPreviewText: String {
+        let source = self.contentState.isProcessing
+            ? self.contentState.transcriptionText
+            : self.contentState.cachedPreviewText
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !Self.transientOverlayStatusTexts.contains(trimmed) else { return "" }
+        return trimmed
+    }
+
+    private var shouldShowPreview: Bool {
+        SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Text(self.compactPreviewText)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.82))
+                .lineLimit(1)
+                .truncationMode(.head)
+                .offset(y: self.shouldShowPreview ? 0 : -4)
+                .opacity(self.shouldShowPreview ? 1 : 0)
+        }
+        .frame(width: self.previewWidth, height: SettingsStore.shared.enableStreamingPreview ? self.previewHeight : 0, alignment: .leading)
+        .padding(.horizontal, SettingsStore.shared.enableStreamingPreview ? 10 : 0)
+        .padding(.bottom, SettingsStore.shared.enableStreamingPreview ? 8 : 0)
+        .clipped()
+        .animation(.easeOut(duration: 0.2), value: self.shouldShowPreview)
     }
 }
 
@@ -1376,6 +1702,119 @@ struct ExpandedModeWaveformView: View {
                     self.barHeights[i] = self.minHeight
                 }
             }
+        }
+    }
+}
+
+struct CompactNotchWaveformView: View {
+    let audioPublisher: AnyPublisher<CGFloat, Never>
+    let color: Color
+
+    @StateObject private var data: AudioVisualizationData
+    @ObservedObject private var contentState = NotchContentState.shared
+    @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 8)
+
+    private let barCount = 8
+    private let barWidth: CGFloat = 2.5
+    private let barSpacing: CGFloat = 2
+    private let minHeight: CGFloat = 3
+    private let maxHeight: CGFloat = 15
+    private let noiseThreshold: CGFloat = 0.05
+    private let processingFlatHeight: CGFloat = 3
+
+    init(audioPublisher: AnyPublisher<CGFloat, Never>, color: Color) {
+        self.audioPublisher = audioPublisher
+        self.color = color
+        _data = StateObject(wrappedValue: AudioVisualizationData(audioLevelPublisher: audioPublisher))
+    }
+
+    var body: some View {
+        ZStack {
+            self.barsView(using: { index in
+                self.displayHeight(for: index)
+            })
+            .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
+
+            if self.contentState.isProcessing {
+                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    .mask {
+                        self.barsView(using: { index in
+                            self.displayHeight(for: index)
+                        })
+                    }
+                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
+            }
+        }
+        .onChange(of: self.data.audioLevel) { _, level in
+            if !self.contentState.isProcessing {
+                self.updateBars(level: level)
+            }
+        }
+        .onChange(of: self.contentState.isProcessing) { _, processing in
+            if processing {
+                self.resetBarsToBaseline(animated: false)
+            } else {
+                self.updateBars(level: self.data.audioLevel)
+            }
+        }
+        .onAppear {
+            if self.contentState.isProcessing {
+                self.resetBarsToBaseline(animated: false)
+            } else {
+                self.updateBars(level: self.data.audioLevel)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func barsView(using height: @escaping (Int) -> CGFloat) -> some View {
+        HStack(spacing: self.barSpacing) {
+            ForEach(0..<self.barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: self.barWidth / 2)
+                    .frame(width: self.barWidth, height: height(index))
+            }
+        }
+    }
+
+    private func displayHeight(for index: Int) -> CGFloat {
+        guard self.contentState.isProcessing else {
+            return self.barHeights[index]
+        }
+
+        return self.processingFlatHeight
+    }
+
+    private func updateBars(level: CGFloat) {
+        let normalizedLevel = min(max(level, 0), 1)
+        let adjustedLevel = normalizedLevel > self.noiseThreshold
+            ? (normalizedLevel - self.noiseThreshold) / (1.0 - self.noiseThreshold)
+            : 0
+
+        guard adjustedLevel > 0 else {
+            self.resetBarsToBaseline(animated: false)
+            return
+        }
+
+        withAnimation(.easeOut(duration: 0.1)) {
+            for index in 0..<self.barCount {
+                let centerDistance = abs(CGFloat(index) - CGFloat(self.barCount - 1) / 2)
+                let centerFactor = 1.0 - (centerDistance / CGFloat(self.barCount / 2)) * 0.28
+                self.barHeights[index] = self.minHeight + (self.maxHeight - self.minHeight) * adjustedLevel * centerFactor
+            }
+        }
+    }
+
+    private func resetBarsToBaseline(animated: Bool) {
+        let apply = {
+            self.barHeights = Array(repeating: self.minHeight, count: self.barCount)
+        }
+
+        if animated {
+            withAnimation(.easeOut(duration: 0.08)) {
+                apply()
+            }
+        } else {
+            apply()
         }
     }
 }
