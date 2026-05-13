@@ -63,6 +63,7 @@ struct SettingsView: View {
     @State private var isRollingBack: Bool = false
     @State private var audioHistoryBudgetText: String = Self.audioBudgetText(for: SettingsStore.shared.audioHistoryBudgetGB)
     @State private var audioHistoryUsageBytes: Int64 = DictationAudioHistoryStore.shared.audioUsageBytes()
+    @State private var showBehaviorAndPrivacySettings: Bool = false
 
     let hotkeyManager: GlobalHotkeyManager?
     let menuBarManager: MenuBarManager
@@ -767,159 +768,179 @@ struct SettingsView: View {
 
                                 // MARK: - Options Section
 
-                                VStack(spacing: 12) {
-                                    HStack(alignment: .center) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Activation Mode")
-                                                .font(.body)
-                                            Text(self.hotkeyMode.description)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-
-                                        Spacer()
-
-                                        Picker("", selection: self.$hotkeyMode) {
-                                            ForEach(HotkeyActivationMode.allCases) { mode in
-                                                Text(mode.displayName).tag(mode)
+                                DisclosureGroup(isExpanded: self.$showBehaviorAndPrivacySettings) {
+                                    VStack(spacing: 12) {
+                                        HStack(alignment: .center) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Activation Mode")
+                                                    .font(.body)
+                                                Text(self.hotkeyMode.description)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
                                             }
-                                        }
-                                        .pickerStyle(.menu)
-                                        .frame(width: 170, alignment: .trailing)
-                                    }
-                                    .onChange(of: self.hotkeyMode) { _, newValue in
-                                        SettingsStore.shared.hotkeyMode = newValue
-                                        self.hotkeyManager?.setHotkeyMode(newValue)
-                                    }
-                                    Divider().opacity(0.2)
 
-                                    self.optionToggleRow(
-                                        title: "Copy to Clipboard",
-                                        description: "Automatically copy transcribed text to clipboard as a backup.",
-                                        isOn: self.$copyToClipboard
-                                    )
-                                    .onChange(of: self.copyToClipboard) { _, newValue in
-                                        SettingsStore.shared.copyTranscriptionToClipboard = newValue
-                                    }
-                                    Divider().opacity(0.2)
+                                            Spacer()
 
-                                    HStack(alignment: .center) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Text Insertion Mode")
-                                                .font(.body)
-                                            Text(SettingsStore.shared.textInsertionMode.description)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-
-                                        Spacer()
-
-                                        Picker("", selection: Binding(
-                                            get: { SettingsStore.shared.textInsertionMode },
-                                            set: { SettingsStore.shared.textInsertionMode = $0 }
-                                        )) {
-                                            ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
-                                                Text(mode.displayName).tag(mode)
+                                            Picker("", selection: self.$hotkeyMode) {
+                                                ForEach(HotkeyActivationMode.allCases) { mode in
+                                                    Text(mode.displayName).tag(mode)
+                                                }
                                             }
+                                            .pickerStyle(.menu)
+                                            .frame(width: 170, alignment: .trailing)
                                         }
-                                        .pickerStyle(.menu)
-                                        .frame(width: 170, alignment: .trailing)
-                                    }
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Save Transcription History",
-                                        description: "Save transcriptions for stats tracking. Disable for privacy.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.saveTranscriptionHistory },
-                                            set: {
-                                                SettingsStore.shared.saveTranscriptionHistory = $0
-                                                self.refreshAudioHistoryUsage()
-                                            }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Save Audio With History",
-                                        description: "Store actual microphone audio locally with dictation history. Disabled by default.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.saveAudioWithTranscriptionHistory },
-                                            set: {
-                                                SettingsStore.shared.saveAudioWithTranscriptionHistory = $0
-                                                self.refreshAudioHistoryUsage()
-                                            }
-                                        )
-                                    )
-                                    .disabled(!SettingsStore.shared.saveTranscriptionHistory)
-
-                                    if SettingsStore.shared.saveTranscriptionHistory,
-                                       SettingsStore.shared.saveAudioWithTranscriptionHistory
-                                    {
-                                        self.audioHistoryControls()
-                                            .padding(.top, 2)
+                                        .onChange(of: self.hotkeyMode) { _, newValue in
+                                            SettingsStore.shared.hotkeyMode = newValue
+                                            self.hotkeyManager?.setHotkeyMode(newValue)
+                                        }
                                         Divider().opacity(0.2)
-                                    } else {
-                                        Divider().opacity(0.2)
-                                    }
 
-                                    self.optionToggleRow(
-                                        title: "Notify AI Enhancement Failures",
-                                        description: "Show a macOS notification when AI Enhancement fails and raw transcription is typed.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.notifyAIProcessingFailures },
-                                            set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
+                                        self.optionToggleRow(
+                                            title: "Copy to Clipboard",
+                                            description: "Automatically copy transcribed text to clipboard as a backup.",
+                                            isOn: self.$copyToClipboard
                                         )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Weekends Don't Break Streak",
-                                        description: "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.weekendsDontBreakStreak },
-                                            set: { SettingsStore.shared.weekendsDontBreakStreak = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "GAAV Mode",
-                                        description: "Remove first letter capitalization and trailing period. Useful for search queries, form fields, or casual text.\nFeature requested by MaxGaav.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.gaavModeEnabled },
-                                            set: { SettingsStore.shared.gaavModeEnabled = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Pause Media During Transcription",
-                                        description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.pauseMediaDuringTranscription },
-                                            set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Share Anonymous Analytics",
-                                        description: "Send anonymous usage and performance metrics to help improve FluidVoice. Never includes transcription text or prompts.",
-                                        isOn: self.analyticsToggleBinding
-                                    )
-
-                                    HStack {
-                                        Button("What we collect") {
-                                            self.showAnalyticsPrivacy = true
+                                        .onChange(of: self.copyToClipboard) { _, newValue in
+                                            SettingsStore.shared.copyTranscriptionToClipboard = newValue
                                         }
-                                        .buttonStyle(.link)
+                                        Divider().opacity(0.2)
 
-                                        Spacer()
+                                        HStack(alignment: .center) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Text Insertion Mode")
+                                                    .font(.body)
+                                                Text(SettingsStore.shared.textInsertionMode.description)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            Spacer()
+
+                                            Picker("", selection: Binding(
+                                                get: { SettingsStore.shared.textInsertionMode },
+                                                set: { SettingsStore.shared.textInsertionMode = $0 }
+                                            )) {
+                                                ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
+                                                    Text(mode.displayName).tag(mode)
+                                                }
+                                            }
+                                            .pickerStyle(.menu)
+                                            .frame(width: 170, alignment: .trailing)
+                                        }
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Save Transcription History",
+                                            description: "Save transcriptions for stats tracking. Disable for privacy.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.saveTranscriptionHistory },
+                                                set: {
+                                                    SettingsStore.shared.saveTranscriptionHistory = $0
+                                                    self.refreshAudioHistoryUsage()
+                                                }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Save Audio With History",
+                                            description: "Store actual microphone audio locally with dictation history. Disabled by default.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.saveAudioWithTranscriptionHistory },
+                                                set: {
+                                                    SettingsStore.shared.saveAudioWithTranscriptionHistory = $0
+                                                    self.refreshAudioHistoryUsage()
+                                                }
+                                            )
+                                        )
+                                        .disabled(!SettingsStore.shared.saveTranscriptionHistory)
+
+                                        if SettingsStore.shared.saveTranscriptionHistory,
+                                           SettingsStore.shared.saveAudioWithTranscriptionHistory
+                                        {
+                                            self.audioHistoryControls()
+                                                .padding(.top, 2)
+                                            Divider().opacity(0.2)
+                                        } else {
+                                            Divider().opacity(0.2)
+                                        }
+
+                                        self.optionToggleRow(
+                                            title: "Notify AI Enhancement Failures",
+                                            description: "Show a macOS notification when AI Enhancement fails and raw transcription is typed.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.notifyAIProcessingFailures },
+                                                set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Weekends Don't Break Streak",
+                                            description: "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.weekendsDontBreakStreak },
+                                                set: { SettingsStore.shared.weekendsDontBreakStreak = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "GAAV Mode",
+                                            description: "Remove first letter capitalization and trailing period. Useful for search queries, form fields, or casual text.\nFeature requested by MaxGaav.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.gaavModeEnabled },
+                                                set: { SettingsStore.shared.gaavModeEnabled = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Pause Media During Transcription",
+                                            description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.pauseMediaDuringTranscription },
+                                                set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Share Anonymous Analytics",
+                                            description: "Send anonymous usage and performance metrics to help improve FluidVoice. Never includes transcription text or prompts.",
+                                            isOn: self.analyticsToggleBinding
+                                        )
+
+                                        HStack {
+                                            Button("What we collect") {
+                                                self.showAnalyticsPrivacy = true
+                                            }
+                                            .buttonStyle(.link)
+
+                                            Spacer()
+                                        }
+                                        .padding(.top, 6)
                                     }
-                                    .padding(.top, 6)
+                                    .padding(.top, 12)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Behavior & Privacy")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                        Text("Insertion, clipboard backup, history, notifications, analytics, and expert dictation toggles.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(self.theme.palette.elevatedCardBackground.opacity(0.72))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                        )
+                                )
                             }
                         } else {
                             // Hotkey disabled - accessibility not enabled

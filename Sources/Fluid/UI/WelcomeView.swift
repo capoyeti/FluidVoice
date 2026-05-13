@@ -13,6 +13,7 @@ struct WelcomeView: View {
     @EnvironmentObject var appServices: AppServices
     private var asr: ASRService { self.appServices.asr }
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @Binding var selectedSidebarItem: SidebarItem?
     @Binding var playgroundUsed: Bool
     var isTranscriptionFocused: FocusState<Bool>.Binding
@@ -24,15 +25,17 @@ struct WelcomeView: View {
     let openAccessibilitySettings: () -> Void
     let restartApp: () -> Void
 
-    private var commandModeShortcutDisplay: String {
-        self.settings.commandModeHotkeyShortcut.displayString
-    }
-
-    private var writeModeShortcutDisplay: String {
-        self.settings.rewriteModeHotkeyShortcut.displayString
-    }
-
     private let playgroundSectionID = "welcome-playground-section"
+
+    private var isSetupReady: Bool {
+        (self.asr.isAsrReady || self.asr.modelsExistOnDisk) &&
+            self.asr.micStatus == .authorized &&
+            self.accessibilityEnabled
+    }
+
+    private var latestHistoryEntry: TranscriptionHistoryEntry? {
+        self.historyStore.entries.first
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -43,16 +46,20 @@ struct WelcomeView: View {
                         Image(systemName: "book.fill")
                             .font(.title2)
                             .foregroundStyle(self.theme.palette.accent)
-                        Text((self.asr.isAsrReady || self.asr.modelsExistOnDisk) ? "Getting Started" : "Welcome to FluidVoice")
+                        Text((self.asr.isAsrReady || self.asr.modelsExistOnDisk) ? "Home" : "Welcome to FluidVoice")
                             .font(.title2.weight(.bold))
                     }
                     .padding(.bottom, 4)
+
+                    if self.asr.isAsrReady || self.asr.modelsExistOnDisk {
+                        self.homeSummaryCard
+                    }
 
                     // Quick Setup Checklist
                     ThemedCard(style: .prominent) {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 10) {
-                                Label("Quick Setup", systemImage: "checkmark.circle.fill")
+                                Label(self.isSetupReady ? "Setup Status" : "Quick Setup", systemImage: "checkmark.circle.fill")
                                     .font(.headline)
                                     .foregroundStyle(self.theme.palette.accent)
 
@@ -152,149 +159,6 @@ struct WelcomeView: View {
                         }
                         .padding(14)
                     }
-
-                    // How to Use
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("How to Use", systemImage: "play.fill")
-                                .font(.headline)
-                                .foregroundStyle(Color.fluidGreen)
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                self.howToStep(number: 1, title: "Start Recording", description: "Press your hotkey (default: Right Option/Alt) or click the button")
-                                self.howToStep(number: 2, title: "Speak Clearly", description: "Speak naturally - works best in quiet environments")
-                                self.howToStep(number: 3, title: "Auto-Type Result", description: "Transcription is automatically typed into your focused app")
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    // Command Mode
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 8) {
-                                Label("Command Mode", systemImage: "terminal.fill")
-                                    .font(.headline)
-                                    .foregroundStyle(Color(red: 1.0, green: 0.35, blue: 0.35))
-
-                                self.featureBadge("New", color: Color(red: 1.0, green: 0.35, blue: 0.35))
-                                self.featureBadge("Alpha", color: Color(red: 1.0, green: 0.35, blue: 0.35).opacity(0.7))
-
-                                Spacer()
-
-                                Button("Open") {
-                                    self.selectedSidebarItem = .commandMode
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-
-                            Text("Control your Mac with voice commands. Execute terminal commands, open apps, and more.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Getting Started")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.orange)
-
-                                HStack(spacing: 4) {
-                                    Text("Press")
-                                    self.keyboardBadge(self.commandModeShortcutDisplay)
-                                    Text("to open, speak your command, then press again to send.")
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.primary.opacity(0.8))
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Examples")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.orange)
-                                self.commandModeExample(icon: "folder", text: "\"List files in my Downloads folder\"")
-                                self.commandModeExample(icon: "plus.rectangle.on.folder", text: "\"Create a folder called Projects on Desktop\"")
-                                self.commandModeExample(icon: "network", text: "\"What's my IP address?\"")
-                                self.commandModeExample(icon: "safari", text: "\"Open Safari\"")
-                            }
-
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                                Text("AI can make mistakes. Avoid destructive commands.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    // Edit Mode
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 8) {
-                                Label("Edit Mode", systemImage: "pencil.and.outline")
-                                    .font(.headline)
-                                    .foregroundStyle(.blue)
-
-                                self.featureBadge("New", color: .blue)
-
-                                Spacer()
-
-                                Button("Open AI Settings") {
-                                    self.selectedSidebarItem = .aiEnhancements
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-
-                            Text("AI-powered editing assistant. Write fresh content or edit selected text with voice.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Create New Text")
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.blue)
-
-                                    HStack(spacing: 4) {
-                                        Text("Press")
-                                        self.keyboardBadge(self.writeModeShortcutDisplay)
-                                        Text("and speak what you want to write.")
-                                    }
-                                    .font(.caption)
-                                    .foregroundStyle(.primary.opacity(0.8))
-
-                                    self.writeModeExample(text: "\"Write an email asking for time off\"")
-                                    self.writeModeExample(text: "\"Draft a thank you note\"")
-                                }
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Edit Selected Text")
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.blue)
-
-                                    HStack(spacing: 4) {
-                                        Text("Select text first, then press")
-                                        self.keyboardBadge(self.writeModeShortcutDisplay)
-                                        Text("and speak your instruction.")
-                                    }
-                                    .font(.caption)
-                                    .foregroundStyle(.primary.opacity(0.8))
-
-                                    self.writeModeExample(text: "\"Make this more formal\"")
-                                    self.writeModeExample(text: "\"Fix grammar and spelling\"")
-                                    self.writeModeExample(text: "\"Summarize this\"")
-                                }
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .frame(maxWidth: .infinity)
 
                     // Test Playground
                     ThemedCard(hoverEffect: false) {
@@ -491,64 +355,140 @@ struct WelcomeView: View {
 
     // MARK: - Helper Views
 
-    private func howToStep(number: Int, title: String, description: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(self.theme.palette.accent.opacity(0.15))
-                    .frame(width: 28, height: 28)
-                Text("\(number)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(self.theme.palette.accent)
+    private var homeSummaryCard: some View {
+        ThemedCard(style: .standard, hoverEffect: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(self.isSetupReady ? "Ready to dictate" : "Finish setup to start dictating")
+                            .font(.title3.weight(.semibold))
+                        Text(self.isSetupReady
+                            ? "Press your hotkey, speak, and FluidVoice types into the active app."
+                            : "Voice model, microphone, and accessibility determine whether dictation is available.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 8) {
+                        Button("Dictation") {
+                            self.selectedSidebarItem = .voiceEngine
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(self.theme.palette.accent)
+
+                        Button("Settings") {
+                            self.selectedSidebarItem = .preferences
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .controlSize(.small)
+                }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        self.homeMetric(
+                            title: "Hotkey",
+                            value: self.settings.hotkeyShortcut.displayString,
+                            icon: "keyboard"
+                        )
+                        self.homeMetric(
+                            title: "Voice Engine",
+                            value: self.settings.selectedSpeechModel.displayName,
+                            icon: "waveform"
+                        )
+                        self.homeMetric(
+                            title: "AI",
+                            value: self.settings.isAIConfigured ? "Configured" : "Optional",
+                            icon: "sparkles"
+                        )
+                    }
+
+                    VStack(spacing: 10) {
+                        self.homeMetric(
+                            title: "Hotkey",
+                            value: self.settings.hotkeyShortcut.displayString,
+                            icon: "keyboard"
+                        )
+                        self.homeMetric(
+                            title: "Voice Engine",
+                            value: self.settings.selectedSpeechModel.displayName,
+                            icon: "waveform"
+                        )
+                        self.homeMetric(
+                            title: "AI",
+                            value: self.settings.isAIConfigured ? "Configured" : "Optional",
+                            icon: "sparkles"
+                        )
+                    }
+                }
+
+                Divider().opacity(0.25)
+
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.accent)
+                        .frame(width: 18, height: 18)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Latest transcription")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(self.latestHistoryEntry?.previewText ?? "No transcription history yet.")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+
+                    Button("Open History") {
+                        self.selectedSidebarItem = .history
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
+            .padding(16)
+        }
+    }
+
+    private func homeMetric(title: String, value: String, icon: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(self.theme.palette.accent)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(self.theme.palette.contentBackground.opacity(0.8))
+                )
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.body.weight(.medium))
-                Text(description)
-                    .font(.subheadline)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer()
+
+            Spacer(minLength: 0)
         }
-    }
-
-    private func featureBadge(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-    }
-
-    private func keyboardBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(self.theme.palette.cardBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-    }
-
-    private func commandModeExample(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundStyle(.orange.opacity(0.8))
-                .frame(width: 14)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
-        }
-    }
-
-    private func writeModeExample(text: String) -> some View {
-        HStack(spacing: 6) {
-            Text("•")
-                .foregroundStyle(.blue.opacity(0.6))
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.52))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                )
+        )
     }
 }
 

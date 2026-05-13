@@ -131,7 +131,6 @@ struct ContentView: View {
     @State private var cancelRecordingHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.cancelRecordingHotkeyShortcut
     @State private var isPromptModeShortcutEnabled: Bool = SettingsStore.shared.promptModeShortcutEnabled
     @State private var isCommandModeShortcutEnabled: Bool = SettingsStore.shared.commandModeShortcutEnabled
-    @State private var aiSettingsExpanded: Bool = true
     @State private var isRewriteModeShortcutEnabled: Bool = SettingsStore.shared.rewriteModeShortcutEnabled
     @State private var isRecordingForRewrite: Bool = false // Track if current recording is for rewrite mode
     @State private var isRecordingForCommand: Bool = false // Track if current recording is for command mode
@@ -249,11 +248,11 @@ struct ContentView: View {
             // Ensure no restart UI shows if we already have trust
             if self.accessibilityEnabled { self.showRestartPrompt = false }
 
-            // Set default selection if none exists (from menu bar navigation)
-            // Show Preferences as default once voice model is ready (AI enhancement is optional)
+            // Set default selection if none exists (from menu bar navigation).
+            // Home keeps the first post-setup stop task-focused instead of dropping users into settings.
             if self.selectedSidebarItem == nil {
                 let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-                self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+                self.selectedSidebarItem = .welcome
             }
             self.handlePendingAppNavigation()
 
@@ -919,106 +918,79 @@ struct ContentView: View {
 
     private var sidebarView: some View {
         List(selection: self.$selectedSidebarItem) {
-            // Priority section: Welcome (if not onboarded) or Preferences (if voice model ready)
-            // Voice model readiness is the key onboarding milestone; AI enhancement is optional
             let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            if !isOnboarded {
+
+            Section {
                 NavigationLink(value: SidebarItem.welcome) {
-                    Label("Welcome", systemImage: "house.fill")
+                    Label(isOnboarded ? "Home" : "Welcome", systemImage: "house.fill")
                         .font(.system(size: 15, weight: .medium))
                 }
                 .listRowBackground(self.sidebarRowBackground(for: .welcome))
-            } else {
-                NavigationLink(value: SidebarItem.preferences) {
-                    Label("Preferences", systemImage: "gearshape.fill")
-                        .font(.system(size: 15, weight: .medium))
-                }
-                .listRowBackground(self.sidebarRowBackground(for: .preferences))
-            }
 
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    self.aiSettingsExpanded.toggle()
-                }
-            }) {
-                HStack {
-                    Label("AI Settings", systemImage: "sparkles")
-                        .font(.system(size: 15, weight: .medium))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(self.aiSettingsExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if self.aiSettingsExpanded {
                 NavigationLink(value: SidebarItem.voiceEngine) {
-                    Label("Voice Engine", systemImage: "waveform")
+                    Label("Dictation", systemImage: "waveform")
                         .font(.system(size: 15, weight: .medium))
-                        .padding(.leading, 18)
                 }
                 .listRowBackground(self.sidebarRowBackground(for: .voiceEngine))
 
                 NavigationLink(value: SidebarItem.aiEnhancements) {
-                    Label("AI Enhancement", systemImage: "brain")
+                    Label("AI Enhancement", systemImage: "sparkles")
                         .font(.system(size: 15, weight: .medium))
-                        .padding(.leading, 18)
                 }
                 .listRowBackground(self.sidebarRowBackground(for: .aiEnhancements))
             }
 
-            // If NOT onboarded, Preferences comes here (below AI Settings)
-            if !isOnboarded {
+            Section("Tools") {
+                NavigationLink(value: SidebarItem.commandMode) {
+                    Label("Command Mode", systemImage: "terminal.fill")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .commandMode))
+
+                NavigationLink(value: SidebarItem.meetingTools) {
+                    Label("File Transcription", systemImage: "doc.text.fill")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .meetingTools))
+
+                NavigationLink(value: SidebarItem.customDictionary) {
+                    Label("Custom Dictionary", systemImage: "text.book.closed.fill")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .customDictionary))
+            }
+
+            Section("Review") {
+                NavigationLink(value: SidebarItem.history) {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .history))
+
+                NavigationLink(value: SidebarItem.stats) {
+                    Label("Stats", systemImage: "chart.bar.fill")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .stats))
+            }
+
+            Section("Support") {
+                NavigationLink(value: SidebarItem.feedback) {
+                    Label("Feedback", systemImage: "envelope.fill")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .listRowBackground(self.sidebarRowBackground(for: .feedback))
+
                 NavigationLink(value: SidebarItem.preferences) {
-                    Label("Preferences", systemImage: "gearshape.fill")
+                    Label("Settings", systemImage: "gearshape.fill")
                         .font(.system(size: 15, weight: .medium))
                 }
                 .listRowBackground(self.sidebarRowBackground(for: .preferences))
             }
 
-            NavigationLink(value: SidebarItem.commandMode) {
-                Label("Command Mode", systemImage: "terminal.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .commandMode))
-
-            NavigationLink(value: SidebarItem.meetingTools) {
-                Label("File Transcription", systemImage: "doc.text.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .meetingTools))
-
-            NavigationLink(value: SidebarItem.customDictionary) {
-                Label("Custom Dictionary", systemImage: "text.book.closed.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .customDictionary))
-
-            NavigationLink(value: SidebarItem.stats) {
-                Label("Stats", systemImage: "chart.bar.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .stats))
-
-            NavigationLink(value: SidebarItem.history) {
-                Label("History", systemImage: "clock.arrow.circlepath")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .history))
-
-            NavigationLink(value: SidebarItem.feedback) {
-                Label("Feedback", systemImage: "envelope.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(self.sidebarRowBackground(for: .feedback))
-
-            // If onboarded, "Getting Started" comes at the bottom
-            if isOnboarded {
+            if !isOnboarded {
                 NavigationLink(value: SidebarItem.welcome) {
-                    Label("Getting Started", systemImage: "house.fill")
+                    Label("Setup Checklist", systemImage: "checklist.checked")
                         .font(.system(size: 15, weight: .medium))
                 }
                 .listRowBackground(self.sidebarRowBackground(for: .welcome))
@@ -1286,15 +1258,13 @@ struct ContentView: View {
 
     private var commandModeView: some View {
         CommandModeView(service: self.commandModeService, onClose: {
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = .welcome
         })
     }
 
     private var rewriteModeView: some View {
         RewriteModeView(service: self.rewriteModeService, onClose: {
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = .welcome
         })
     }
 
@@ -2893,8 +2863,7 @@ struct ContentView: View {
 
         if self.selectedSidebarItem == .rewriteMode {
             DebugLogger.shared.debug("Cancel shortcut: closing mode view", source: "ContentView")
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = .welcome
             handled = true
         }
 
@@ -3171,8 +3140,7 @@ extension ContentView {
 
         self.settings.onboardingCompleted = true
 
-        let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-        self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+        self.selectedSidebarItem = .welcome
     }
 
     func labelFor(status: AVAuthorizationStatus) -> String {

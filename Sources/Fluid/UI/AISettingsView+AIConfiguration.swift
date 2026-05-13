@@ -51,13 +51,13 @@ extension AIEnhancementSettingsView {
             ThemedCard(style: .prominent, hoverEffect: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     self.aiSetupHeader
-                    self.aiSetupSummaryBar
+                    self.activeAIConfigurationSummary
 
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Providers")
+                            Text("AI Configuration")
                                 .font(.system(size: 14, weight: .semibold))
-                            Text("Configure your AI provider")
+                            Text("The active provider stays visible. Expand the catalog only when you need to switch or add one.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -89,12 +89,26 @@ extension AIEnhancementSettingsView {
 
                     if self.viewModel.showHelp { self.helpSectionView }
 
-                    self.providerStepContent
+                    self.aiDisclosureSection(
+                        title: "Provider Catalog",
+                        subtitle: "Verified providers, available integrations, model pickers, and connection testing.",
+                        icon: "building.2",
+                        isExpanded: self.$showProviderCatalog
+                    ) {
+                        self.providerStepContent
+                    }
 
                     Divider()
                         .background(self.theme.palette.separator.opacity(0.5))
 
-                    self.promptsStepContent
+                    self.aiDisclosureSection(
+                        title: "Prompts & Routing",
+                        subtitle: "Prompt presets, app-specific overrides, Edit mode routing, and advanced prompt management.",
+                        icon: "text.bubble",
+                        isExpanded: self.$showPromptAdvanced
+                    ) {
+                        self.promptsStepContent
+                    }
                 }
                 .padding(16)
             }
@@ -139,45 +153,139 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var aiSetupSummaryBar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
-                self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "slider.horizontal.3", text: "AI Enhancement enables dictation prompts")
+    private var activeAIConfigurationSummary: some View {
+        let providerName = self.viewModel.providerDisplayName(for: self.viewModel.selectedProviderID)
+        let modelName = self.viewModel.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let connection = self.viewModel.connectionStatus(for: self.viewModel.selectedProviderID)
+        let statusText: String
+        let statusColor: Color
+
+        switch connection {
+        case .success:
+            statusText = "Verified"
+            statusColor = Color.fluidGreen
+        case .failed:
+            statusText = "Needs attention"
+            statusColor = .red
+        case .testing:
+            statusText = "Checking"
+            statusColor = self.theme.palette.accent
+        case .unknown:
+            statusText = self.settings.isAIConfigured ? "Configured" : "Not configured"
+            statusColor = self.settings.isAIConfigured ? self.theme.palette.accent : .orange
+        }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(self.theme.palette.contentBackground.opacity(0.88))
+                    Image(systemName: self.settings.isAIConfigured ? "sparkles" : "sparkles.rectangle.stack")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.accent)
+                }
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Active AI Setup")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                    Text(providerName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.primaryText)
+                }
+
+                Spacer()
+
+                Text(statusText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(statusColor.opacity(0.12))
+                    )
             }
 
-            VStack(alignment: .leading, spacing: 7) {
-                self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
-                self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryItem(icon: "slider.horizontal.3", text: "AI Enhancement enables dictation prompts")
+            HStack(spacing: 10) {
+                self.aiSummaryChip(title: "Model", value: modelName.isEmpty ? "Choose a model" : modelName)
+                self.aiSummaryChip(title: "Dictation", value: self.viewModel.isPrimaryDictationPromptSelectionOff() ? "Raw" : "Enhanced")
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.55))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.32), lineWidth: 1)
+                )
+        )
     }
 
-    private var aiSetupSummaryDivider: some View {
-        Rectangle()
-            .fill(self.theme.palette.separator.opacity(0.45))
-            .frame(width: 1, height: 14)
-    }
-
-    private func aiSetupSummaryItem(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(self.theme.palette.accent.opacity(0.95))
-                .frame(width: 14)
-
-            Text(text)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(self.theme.palette.secondaryText)
+    private func aiSummaryChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(self.theme.palette.tertiaryText)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .lineLimit(1)
+                .truncationMode(.tail)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(self.theme.palette.cardBackground.opacity(0.76))
+        )
+    }
+
+    private func aiDisclosureSection<Content: View>(
+        title: String,
+        subtitle: String,
+        icon: String,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        DisclosureGroup(isExpanded: isExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(.top, 12)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.accent)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(self.theme.palette.contentBackground.opacity(0.84))
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(self.theme.palette.cardBackground.opacity(0.52))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.28), lineWidth: 1)
+                )
+        )
     }
 
     var apiKeyWarningView: some View {
