@@ -1341,59 +1341,6 @@ struct SettingsView: View {
                         .padding(16)
                 }
 
-                // Under Development Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Label("Under Development", systemImage: "exclamationmark.triangle")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "exclamationmark.circle")
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 2)
-
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack(alignment: .center, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Dictation Speed")
-                                            .font(.body)
-                                        Text(self.settings.parakeetFinalizationMode.detailText)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    Spacer(minLength: 12)
-
-                                    Picker("", selection: self.$settings.parakeetFinalizationMode) {
-                                        ForEach(ParakeetFinalizationMode.allCases) { mode in
-                                            Text(mode.displayName).tag(mode)
-                                        }
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .frame(width: 220)
-                                    .disabled(self.asr.isRunning)
-                                }
-
-                                Text("Fast can finish sooner by reusing live transcription, but it may be less accurate or inconsistent. Normal is the safer default.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-
-                        if self.asr.isRunning {
-                            Text("Settings are disabled during active recording")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .italic()
-                        }
-                    }
-                    .padding(16)
-                }
-
                 // Debug Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -1449,6 +1396,50 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             #endif
+                        }
+                    }
+                    .padding(16)
+                }
+
+                // Under Development Card
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Under Development", systemImage: "exclamationmark.triangle")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Dictation Speed")
+                                        .font(.body)
+                                    Text(self.settings.parakeetFinalizationMode.detailText)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: self.$settings.parakeetFinalizationMode) {
+                                    ForEach(ParakeetFinalizationMode.allCases) { mode in
+                                        Text(mode.displayName).tag(mode)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 170, alignment: .trailing)
+                                .disabled(self.asr.isRunning)
+                            }
+
+                            Text("Experimental. Normal is the safest choice; Fast is for trying even quicker dictation with possible inconsistencies.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if self.asr.isRunning {
+                                Text("Settings are disabled during active recording")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .italic()
+                            }
                         }
                     }
                     .padding(16)

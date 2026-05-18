@@ -18,9 +18,9 @@ enum ParakeetFinalizationMode: String, CaseIterable, Codable, Identifiable {
     var detailText: String {
         switch self {
         case .stableFullFinal:
-            return "Very reliable. This uses the default FluidVoice processing after you stop dictating."
+            return "Most reliable. Best default for everyday dictation."
         case .tokenTimedChunkMerge:
-            return "Tries to finish faster using live transcription, but it is still experimental and can be less consistent."
+            return "Feels faster, but may be less consistent. Try it if speed matters more."
         }
     }
 }
