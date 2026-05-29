@@ -1,3 +1,4 @@
+import FluidIntelligence
 import Foundation
 
 enum Fluid1PromptFormat {
@@ -5,6 +6,10 @@ enum Fluid1PromptFormat {
 
     nonisolated static func matches(model: String) -> Bool {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if FluidModelRegistry.model(id: normalized) != nil {
+            return true
+        }
+
         let compact = normalized
             .replacingOccurrences(of: "_", with: "-")
             .replacingOccurrences(of: " ", with: "-")

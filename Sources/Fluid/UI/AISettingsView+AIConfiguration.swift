@@ -660,6 +660,23 @@ extension AIEnhancementSettingsView {
                 }
                 .buttonStyle(AccentButtonStyle(compact: true))
                 .disabled(isBusy)
+            } else if model.canDownload {
+                Button(action: { self.downloadFluidIntelligenceModel(model) }) {
+                    HStack(spacing: 6) {
+                        if isDownloading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .fixedSize()
+                        } else {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.system(size: 12))
+                        }
+                        Text(isDownloading ? "Downloading..." : "Download & Verify")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                }
+                .buttonStyle(AccentButtonStyle(compact: true))
+                .disabled(isBusy)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle")
@@ -710,7 +727,19 @@ extension AIEnhancementSettingsView {
             do {
                 _ = try await FluidIntelligenceIntegrationService.prepareModel(model)
                 guard self.fluidIntelligenceSelectedModelID == model.id else { return }
-                self.fluidIntelligenceLoadState = .idle
+                self.fluidIntelligenceLoadState = .loading(modelID: model.id)
+                let start = ContinuousClock.now
+                let verified = await self.viewModel.verifyFluidIntelligence(model: model)
+                let latencyMilliseconds = Self.elapsedMilliseconds(since: start)
+                guard self.fluidIntelligenceSelectedModelID == model.id else { return }
+                if verified {
+                    self.fluidIntelligenceLoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
+                } else {
+                    let message = self.viewModel.connectionErrorMessage.isEmpty
+                        ? "Model downloaded, but verification failed."
+                        : self.viewModel.connectionErrorMessage
+                    self.fluidIntelligenceLoadState = .failed(modelID: model.id, message: message)
+                }
             } catch {
                 guard self.fluidIntelligenceSelectedModelID == model.id else { return }
                 self.fluidIntelligenceLoadState = .failed(
@@ -812,7 +841,7 @@ extension AIEnhancementSettingsView {
         if model.canDownload {
             return FluidIntelligenceModelStatus(
                 title: "Download available",
-                detail: "This registry entry has a locked download artifact.",
+                detail: "\(model.displayName) can be downloaded and verified locally.",
                 icon: "arrow.down.circle.fill",
                 detailIcon: "arrow.down.circle",
                 color: self.theme.palette.accent
@@ -1264,10 +1293,12 @@ extension AIEnhancementSettingsView {
         let fluidModel = self.selectedFluidIntelligenceModel
         let fluidStatus = self.fluidIntelligenceModelStatus(for: fluidModel)
         let isFluidInstalled = FluidIntelligenceIntegrationService.isModelInstalled(fluidModel)
+        let isFluidDownloading = self.fluidIntelligenceLoadState.isDownloading(fluidModel.id)
         let isFluidLoading = self.fluidIntelligenceLoadState.isLoading(fluidModel.id)
         let isFluidLoaded = self.fluidIntelligenceLoadState.isLoaded(fluidModel.id)
         let hasFluidLoadFailure = self.fluidIntelligenceLoadState.failureMessage(for: fluidModel.id) != nil
         let isFluidTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == "fluid-1"
+        let isFluidBusy = isFluidDownloading || isFluidLoading || isFluidTesting
         let isRefreshing = self.viewModel.isFetchingModels && self.viewModel.selectedProviderID == item.id
         let baseURL = self.providerBaseURL(for: item).trimmingCharacters(in: .whitespacesAndNewlines)
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
@@ -1319,7 +1350,7 @@ extension AIEnhancementSettingsView {
                     },
                     isRefreshing: isRefreshing,
                     refreshEnabled: isFluidIntelligence ? true : canFetchModels,
-                    selectionEnabled: isFluidIntelligence ? (!isFluidLoading && !isFluidTesting) : hasModels,
+                    selectionEnabled: isFluidIntelligence ? !isFluidBusy : hasModels,
                     controlWidth: 180,
                     controlHeight: 28
                 )
@@ -1337,7 +1368,7 @@ extension AIEnhancementSettingsView {
                     }
                     .buttonStyle(CompactButtonStyle(foreground: isFluidLoaded ? Color.fluidGreen : nil))
                     .frame(width: 28, height: 28)
-                    .disabled(!isFluidInstalled || isFluidLoading || isFluidTesting)
+                    .disabled(!isFluidInstalled || isFluidBusy)
                     .help("Load selected model")
 
                     Button(action: { self.unloadFluidIntelligenceModel() }) {
@@ -1346,7 +1377,7 @@ extension AIEnhancementSettingsView {
                     }
                     .buttonStyle(CompactButtonStyle())
                     .frame(width: 28, height: 28)
-                    .disabled(isFluidLoading || isFluidTesting || !isFluidLoaded)
+                    .disabled(isFluidBusy || !isFluidLoaded)
                     .help("Unload selected model")
 
                     Button(action: { self.revealFluidIntelligenceModelFolder() }) {
@@ -1356,6 +1387,23 @@ extension AIEnhancementSettingsView {
                     .buttonStyle(CompactButtonStyle())
                     .frame(width: 28, height: 28)
                     .help("Open models folder")
+
+                    if !isFluidInstalled {
+                        Button(action: { self.downloadFluidIntelligenceModel(fluidModel) }) {
+                            if isFluidDownloading {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .fixedSize()
+                            } else {
+                                Image(systemName: "arrow.down.circle")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                        }
+                        .buttonStyle(CompactButtonStyle())
+                        .frame(width: 28, height: 28)
+                        .disabled(!fluidModel.canDownload || isFluidBusy)
+                        .help(fluidModel.canDownload ? "Download and verify selected model" : "Download URL is not configured yet")
+                    }
                 } else {
                     self.reasoningButton(for: item.id)
 
@@ -1375,7 +1423,7 @@ extension AIEnhancementSettingsView {
                 }
             }
 
-            if isFluidIntelligence, isFluidLoading || isFluidLoaded || hasFluidLoadFailure {
+            if isFluidIntelligence, isFluidDownloading || isFluidLoading || isFluidLoaded || hasFluidLoadFailure || !isFluidInstalled {
                 HStack(spacing: 6) {
                     Image(systemName: fluidStatus.detailIcon)
                         .font(.caption)
