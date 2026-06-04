@@ -2913,7 +2913,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
             case .cohereTranscribeSixBit: return "Cohere Transcribe"
-            case .nemotronOffline: return "Nemotron Speech 3.5 - Accurate"
+            case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Fast"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Fast"
             case .appleSpeech: return "Apple ASR Legacy"
@@ -3071,7 +3071,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
             case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
-            case .nemotronOffline: return "Nemotron Speech 3.5 - Accurate"
+            case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Fast"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Fast"
             case .appleSpeech: return "Apple ASR Legacy"
@@ -3102,7 +3102,7 @@ final class SettingsStore: ObservableObject {
             case .cohereTranscribeSixBit:
                 return "High-accuracy multilingual transcription. Select the language manually before dictation for best results."
             case .nemotronOffline:
-                return "NVIDIA Nemotron 3.5 offline transcription with manual language selection."
+                return "NVIDIA Nemotron 3.5 multilingual transcription with manual language selection."
             case .nemotronStreaming:
                 return "NVIDIA Nemotron 3.5 low-latency streaming with manual language selection."
             case .nemotronStreaming320:
@@ -3262,6 +3262,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
             case .cohereTranscribeSixBit: return "New"
+            case .nemotronOffline: return "New + Beta"
             case .appleSpeechAnalyzer: return "New"
             default: return nil
             }
@@ -3281,7 +3282,7 @@ final class SettingsStore: ObservableObject {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
-            case .qwen3Asr, .nemotronOffline, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return false // Too slow for real-time chunk processing
             default:
                 return true // All other models support streaming
