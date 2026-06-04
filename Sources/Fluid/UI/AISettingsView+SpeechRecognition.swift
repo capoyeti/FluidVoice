@@ -330,10 +330,10 @@ extension VoiceEngineSettingsView {
                             .foregroundStyle(self.theme.palette.accent)
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Select Language Manually")
+                            Text("Select Language")
                                 .font(.caption)
                                 .fontWeight(.semibold)
-                            Text("Choose the language prompt injected into Nemotron transcription.")
+                            Text("Choose the language prompt injected into Nemotron transcription, or use auto detect.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)

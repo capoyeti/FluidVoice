@@ -3824,28 +3824,6 @@ extension SettingsStore {
         var tokenString: String { "<|\(self.rawValue)|>" }
     }
 
-    enum NemotronLanguage: String, CaseIterable, Identifiable, Codable {
-        case english = "en"
-        case portuguese = "pt"
-        case spanish = "es"
-        case french = "fr"
-        case german = "de"
-        case italian = "it"
-
-        var id: String { self.rawValue }
-
-        var displayName: String {
-            switch self {
-            case .english: return "English"
-            case .portuguese: return "Portuguese"
-            case .spanish: return "Spanish"
-            case .french: return "French"
-            case .german: return "German"
-            case .italian: return "Italian"
-            }
-        }
-    }
-
     // MARK: - Unified Speech Model Selection
 
     /// The selected speech recognition model.
@@ -3903,10 +3881,8 @@ extension SettingsStore {
 
     var selectedNemotronLanguage: NemotronLanguage {
         get {
-            if let rawValue = self.defaults.string(forKey: Keys.selectedNemotronLanguage),
-               let language = NemotronLanguage(rawValue: rawValue)
-            {
-                return language
+            if let rawValue = self.defaults.string(forKey: Keys.selectedNemotronLanguage) {
+                return NemotronLanguage(rawValue: rawValue)
             }
             return .english
         }
