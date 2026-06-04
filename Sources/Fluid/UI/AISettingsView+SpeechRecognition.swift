@@ -425,7 +425,7 @@ extension VoiceEngineSettingsView {
                 Text(model.humanReadableName)
                     .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? self.theme.palette.primaryText : .secondary)
-                Text(model.displayName)
+                Text(self.speechModelSubtitle(for: model))
                     .font(.caption)
                     .foregroundStyle(.secondary.opacity(0.7))
 
@@ -614,6 +614,15 @@ extension VoiceEngineSettingsView {
         }
         .opacity(self.viewModel.asr.isRunning ? 0.6 : 1.0)
         .allowsHitTesting(!self.viewModel.asr.isRunning)
+    }
+
+    private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
+        switch model {
+        case .nemotronStreaming, .nemotronStreaming320:
+            return "Nemotron Speech 3.5 - Streaming Capable"
+        default:
+            return model.displayName
+        }
     }
 
     var modelStatusView: some View {

@@ -210,7 +210,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         case .nemotronOffline:
             return "Nemotron 3.5 Multilingual uses NVIDIA CoreML models. Supports around 40 languages with auto or manual language selection. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronStreaming, .nemotronStreaming320:
-            return "Nemotron Speech 3.5 Ultra Fast Low Latency uses NVIDIA's streaming CoreML pipeline. Supports around 40 languages with auto or manual language selection."
+            return "Nemotron Speech 3.5 Streaming Capable uses NVIDIA's streaming CoreML pipeline. Supports around 40 languages with auto or manual language selection."
         default:
             return "Whisper models support 99 languages and work on any Mac."
         }

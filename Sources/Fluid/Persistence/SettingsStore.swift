@@ -3102,9 +3102,9 @@ final class SettingsStore: ObservableObject {
             case .nemotronOffline:
                 return "NVIDIA Nemotron 3.5 multilingual transcription. Supports around 40 languages with auto or manual language selection."
             case .nemotronStreaming:
-                return "NVIDIA Nemotron 3.5 low-latency streaming. Supports around 40 languages with auto or manual language selection."
+                return "NVIDIA Nemotron 3.5 streaming-capable transcription. Supports around 40 languages with auto or manual language selection."
             case .nemotronStreaming320:
-                return "NVIDIA Nemotron 3.5 low-latency streaming. Supports around 40 languages with auto or manual language selection."
+                return "NVIDIA Nemotron 3.5 streaming-capable transcription. Supports around 40 languages with auto or manual language selection."
             case .appleSpeech:
                 return "Built-in macOS speech recognition. No download required."
             case .appleSpeechAnalyzer:
