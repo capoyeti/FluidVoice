@@ -187,6 +187,40 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testLegacyBlockedPromptPlaceholderIsRemoved() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+
+            let blocked = SettingsStore.DictationPromptProfile(
+                name: "Blocked",
+                prompt: "Blocked prompt",
+                mode: .dictate
+            )
+            let real = SettingsStore.DictationPromptProfile(
+                name: "Keep Me",
+                prompt: "Real user prompt",
+                mode: .dictate
+            )
+
+            settings.dictationPromptProfiles = [blocked, real]
+            settings.selectedDictationPromptID = blocked.id
+            settings.appPromptBindings = [
+                SettingsStore.AppPromptBinding(
+                    mode: .dictate,
+                    appBundleID: "com.apple.notes",
+                    appName: "Notes",
+                    promptID: blocked.id
+                ),
+            ]
+
+            settings.reconcilePromptStateAfterProfileChanges()
+
+            XCTAssertEqual(settings.dictationPromptProfiles.map(\.id), [real.id])
+            XCTAssertNil(settings.selectedDictationPromptID)
+            XCTAssertEqual(settings.appPromptBindings.first?.promptID, nil)
+        }
+    }
+
     func testCustomProviderSettingsRoundTripThroughSettingsStore() {
         self.withProviderSettingsRestored {
             let settings = SettingsStore.shared
@@ -207,6 +241,17 @@ final class DictationE2ETests: XCTestCase {
             XCTAssertEqual(settings.savedProviders, [provider])
             XCTAssertEqual(settings.availableModelsByProvider[providerKey], provider.models)
             XCTAssertEqual(settings.selectedModelByProvider[providerKey], provider.models[0])
+        }
+    }
+
+    func testUnavailableSelectedProviderFallsBackToOpenAI() {
+        self.withProviderSettingsRestored {
+            let settings = SettingsStore.shared
+
+            settings.savedProviders = []
+            settings.selectedProviderID = "removed-provider"
+
+            XCTAssertEqual(settings.selectedProviderID, "openai")
         }
     }
 

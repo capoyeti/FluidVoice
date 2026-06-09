@@ -1205,10 +1205,11 @@ final class SettingsStore: ObservableObject {
     }
 
     var selectedProviderID: String {
-        get { self.defaults.string(forKey: Keys.selectedProviderID) ?? "openai" }
+        get { self.availableSelectedProviderID(for: self.defaults.string(forKey: Keys.selectedProviderID)) }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.selectedProviderID)
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.defaults.set(trimmed.isEmpty ? "openai" : trimmed, forKey: Keys.selectedProviderID)
         }
     }
 
@@ -2586,6 +2587,18 @@ final class SettingsStore: ObservableObject {
                 didChangeProfiles = true
             }
         }
+        normalizedProfiles.removeAll { profile in
+            let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = Self.stripBasePrompt(for: profile.mode, from: profile.prompt)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let isLegacyPlaceholder = profile.mode.normalized == .dictate &&
+                name.caseInsensitiveCompare("Blocked") == .orderedSame &&
+                prompt.caseInsensitiveCompare("Blocked prompt") == .orderedSame
+            if isLegacyPlaceholder {
+                didChangeProfiles = true
+            }
+            return isLegacyPlaceholder
+        }
         if didChangeProfiles {
             self.dictationPromptProfiles = normalizedProfiles
         }
@@ -2734,6 +2747,20 @@ final class SettingsStore: ObservableObject {
             return providerID
         }
         return "custom:\(providerID)"
+    }
+
+    private func availableSelectedProviderID(for rawValue: String?) -> String {
+        let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let providerID = trimmed.isEmpty ? "openai" : trimmed
+        if ModelRepository.shared.isBuiltIn(providerID) { return providerID }
+
+        let savedProviderID = providerID.hasPrefix("custom:") ?
+            String(providerID.dropFirst("custom:".count)) : providerID
+        if self.savedProviders.contains(where: { $0.id == savedProviderID }) {
+            return savedProviderID
+        }
+
+        return "openai"
     }
 
     private func sanitizeAPIKeys(_ values: [String: String]) -> [String: String] {
