@@ -860,8 +860,12 @@ struct OnboardingAIEnhancementStepView: View {
             Spacer()
 
             if self.shouldShowTryout {
-                self.finishButton
-                    .keyboardShortcut(.defaultAction)
+                HStack(spacing: 12) {
+                    self.skipTryoutButton
+
+                    self.finishButton
+                        .keyboardShortcut(.defaultAction)
+                }
             } else {
                 HStack(spacing: 12) {
                     self.providerChoiceButton
@@ -908,6 +912,25 @@ struct OnboardingAIEnhancementStepView: View {
             action: {
                 self.cancelPrivateAIAction()
                 self.onSkip()
+            }
+        )
+    }
+
+    private var skipTryoutButton: some View {
+        self.pillButton(
+            PillButtonConfiguration(
+                id: "ai-skip-tryout",
+                title: "Skip",
+                systemImage: nil,
+                tone: .secondary,
+                width: 132,
+                height: 48,
+                fontSize: 16,
+                isEnabled: self.canNavigateOrMutate
+            ),
+            action: {
+                self.cancelPrivateAIAction()
+                self.onFinishSetup()
             }
         )
     }

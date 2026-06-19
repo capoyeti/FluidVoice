@@ -2009,6 +2009,7 @@ struct ContentView: View {
         finalText = ASRService.applyGAAVFormatting(finalText)
         self.asr.finalText = finalText
         if route == .onboardingSandbox,
+           self.isOnboardingVoicePlaygroundStepActive,
            !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             self.settings.onboardingPlaygroundValidated = true
@@ -2196,18 +2197,22 @@ struct ContentView: View {
         }
     }
 
-    private var isOnboardingPlaygroundStepActive: Bool {
+    private var isOnboardingVoicePlaygroundStepActive: Bool {
         let onboardingPlaygroundStep = 4
-        let onboardingAIEnhancementStep = 5
         return !self.settings.onboardingCompleted &&
-            (self.settings.onboardingCurrentStep == onboardingPlaygroundStep ||
-                self.settings.onboardingCurrentStep == onboardingAIEnhancementStep)
+            self.settings.onboardingCurrentStep == onboardingPlaygroundStep
+    }
+
+    private var isOnboardingSandboxRouteActive: Bool {
+        let onboardingAIEnhancementStep = 5
+        return self.isOnboardingVoicePlaygroundStepActive ||
+            (!self.settings.onboardingCompleted && self.settings.onboardingCurrentStep == onboardingAIEnhancementStep)
     }
 
     private func currentDictationOutputRouteForHotkeyStop() -> DictationOutputRoute {
         let isDictationMode = self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode
 
-        if self.isOnboardingPlaygroundStepActive && isDictationMode {
+        if self.isOnboardingSandboxRouteActive && isDictationMode {
             return .onboardingSandbox
         }
         return .normal
@@ -3169,7 +3174,7 @@ extension ContentView {
     private func beginDictationRecording(for slot: SettingsStore.DictationShortcutSlot, mode: ActiveRecordingMode) {
         DebugLogger.shared.debug("Begin dictation recording for slot \(slot.rawValue)", source: "ContentView")
         self.appBench("begin_recording slot=\(slot.rawValue) mode=\(mode.rawValue)")
-        if self.isOnboardingPlaygroundStepActive {
+        if self.isOnboardingVoicePlaygroundStepActive {
             self.asr.finalText = ""
             self.settings.onboardingPlaygroundValidated = false
             self.settings.onboardingPlaygroundSkipped = false

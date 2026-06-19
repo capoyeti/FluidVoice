@@ -1022,54 +1022,53 @@ struct OnboardingFlowView: View {
                     FluidOnboardingCompactProgress(value: self.compactProgressValue)
                         .padding(.top, 28)
 
-                    Color.clear
-                        .frame(height: 30)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark(size: 66)
+                                .padding(.bottom, 22)
 
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark(size: 66)
-                            .padding(.bottom, 22)
+                            Text("What language will\nyou speak most?")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .padding(.bottom, 18)
 
-                        Text("What language will\nyou speak most?")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .padding(.bottom, 18)
+                            Text("We'll show the best voice engines for it.")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                                .padding(.bottom, 26)
 
-                        Text("We'll show the best voice engines for it.")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.62))
-                            .padding(.bottom, 26)
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.fixed(166), spacing: 16),
+                                    GridItem(.fixed(166), spacing: 16),
+                                    GridItem(.fixed(166), spacing: 16),
+                                ],
+                                spacing: 16
+                            ) {
+                                ForEach(self.popularOnboardingLanguages) { language in
+                                    self.languageChoiceCard(for: language)
+                                }
 
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.fixed(166), spacing: 16),
-                                GridItem(.fixed(166), spacing: 16),
-                                GridItem(.fixed(166), spacing: 16),
-                            ],
-                            spacing: 16
-                        ) {
-                            ForEach(self.popularOnboardingLanguages) { language in
-                                self.languageChoiceCard(for: language)
+                                self.otherLanguageCard
+                            }
+                            .frame(width: 530)
+
+                            if self.isShowingAllLanguages {
+                                self.allLanguagesPicker
+                                    .padding(.top, 18)
                             }
 
-                            self.otherLanguageCard
-                        }
-                        .frame(width: 530)
-
-                        if self.isShowingAllLanguages {
-                            self.allLanguagesPicker
+                            Text("You can change this later in Voice Engine settings.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.44))
                                 .padding(.top, 18)
                         }
-
-                        Text("You can change this later in Voice Engine settings.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.44))
-                            .padding(.top, 18)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
+                        .padding(.bottom, 12)
                     }
-                    .frame(maxWidth: .infinity)
-
-                    Spacer(minLength: 28)
 
                     self.cinematicFooter(
                         continueTitle: "Continue",
@@ -1475,11 +1474,6 @@ struct OnboardingFlowView: View {
 
     private var voiceModelStep: some View {
         GeometryReader { proxy in
-            let availableRouteHeight = max(CGFloat(306), proxy.size.height - 410)
-            let routeGridHeight = self.isShowingOtherModelRoutes
-                ? min(CGFloat(500), max(CGFloat(330), availableRouteHeight))
-                : min(CGFloat(340), availableRouteHeight)
-
             ZStack {
                 FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
 
@@ -1487,40 +1481,37 @@ struct OnboardingFlowView: View {
                     FluidOnboardingCompactProgress(value: self.compactProgressValue)
                         .padding(.top, 28)
 
-                    Color.clear
-                        .frame(height: 30)
+                    ScrollView(.vertical, showsIndicators: self.isShowingOtherModelRoutes) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark(size: 66)
+                                .padding(.bottom, 22)
 
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark(size: 66)
-                            .padding(.bottom, 22)
+                            Text("Choose your\nvoice engine")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.bottom, 16)
 
-                        Text("Choose your\nvoice engine")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.bottom, 16)
+                            Text(self.recommendedModelReasonText)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                                .multilineTextAlignment(.center)
+                                .padding(.bottom, 14)
 
-                        Text(self.recommendedModelReasonText)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.62))
-                            .multilineTextAlignment(.center)
-                            .padding(.bottom, 14)
+                            Text(self.selectedOnboardingLanguage.displayName)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(FluidOnboardingLandingColors.blue)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(FluidOnboardingLandingColors.blue.opacity(0.12))
+                                        .overlay(Capsule().stroke(FluidOnboardingLandingColors.blue.opacity(0.24), lineWidth: 1))
+                                )
+                                .padding(.bottom, 18)
 
-                        Text(self.selectedOnboardingLanguage.displayName)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(FluidOnboardingLandingColors.blue)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(FluidOnboardingLandingColors.blue.opacity(0.12))
-                                    .overlay(Capsule().stroke(FluidOnboardingLandingColors.blue.opacity(0.24), lineWidth: 1))
-                            )
-                            .padding(.bottom, 18)
-
-                        ScrollView(.vertical, showsIndicators: self.isShowingOtherModelRoutes) {
                             VStack(spacing: 10) {
                                 let defaultRoutes = self.defaultDisplayedModelRoutes
                                 if defaultRoutes.count == 1, let route = defaultRoutes.first {
@@ -1556,17 +1547,17 @@ struct OnboardingFlowView: View {
                             .transaction { transaction in
                                 transaction.animation = nil
                             }
+                            .frame(width: 608)
+
+                            Text("You can switch models later in Voice Engine settings.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.44))
+                                .padding(.top, 18)
                         }
-                        .frame(width: 608, height: routeGridHeight)
-
-                        Text("You can switch models later in Voice Engine settings.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.44))
-                            .padding(.top, 18)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
+                        .padding(.bottom, 12)
                     }
-                    .frame(maxWidth: .infinity)
-
-                    Spacer(minLength: 24)
 
                     self.cinematicFooter(
                         continueTitle: "Continue",
@@ -1599,63 +1590,62 @@ struct OnboardingFlowView: View {
                     FluidOnboardingCompactProgress(value: self.compactProgressValue)
                         .padding(.top, 28)
 
-                    Color.clear
-                        .frame(height: 34)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark(size: 66)
+                                .padding(.bottom, 22)
 
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark(size: 66)
-                            .padding(.bottom, 22)
+                            Text("Let FluidVoice\nlisten and type")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .padding(.bottom, 16)
 
-                        Text("Let FluidVoice\nlisten and type")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .padding(.bottom, 16)
+                            Text("Two quick permissions make dictation work anywhere.")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                                .padding(.bottom, 28)
 
-                        Text("Two quick permissions make dictation work anywhere.")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.62))
-                            .padding(.bottom, 28)
+                            VStack(spacing: 14) {
+                                self.permissionRow(
+                                    stepNumber: 1,
+                                    title: self.isMicrophoneReady ? "Microphone is ready" : "Allow microphone",
+                                    subtitle: self.isMicrophoneReady
+                                        ? "FluidVoice can hear your dictation."
+                                        : "macOS will ask once. Click Allow to start dictating.",
+                                    systemImage: "mic.fill",
+                                    isReady: self.isMicrophoneReady,
+                                    actionTitle: self.microphoneActionButtonTitle
+                                ) {
+                                    self.handleMicrophoneAction()
+                                }
 
-                        VStack(spacing: 14) {
-                            self.permissionRow(
-                                stepNumber: 1,
-                                title: self.isMicrophoneReady ? "Microphone is ready" : "Allow microphone",
-                                subtitle: self.isMicrophoneReady
-                                    ? "FluidVoice can hear your dictation."
-                                    : "macOS will ask once. Click Allow to start dictating.",
-                                systemImage: "mic.fill",
-                                isReady: self.isMicrophoneReady,
-                                actionTitle: self.microphoneActionButtonTitle
-                            ) {
-                                self.handleMicrophoneAction()
+                                self.permissionRow(
+                                    stepNumber: 2,
+                                    title: self.accessibilityPermissionTitle,
+                                    subtitle: self.accessibilityPermissionSubtitle,
+                                    systemImage: "keyboard.fill",
+                                    isReady: self.isAccessibilityReady,
+                                    statusTitle: self.accessibilityPermissionStatusTitle,
+                                    actionTitle: self.accessibilityPermissionActionTitle
+                                ) {
+                                    self.openAccessibilitySettings()
+                                }
+
+                                if !self.isAccessibilityReady {
+                                    Text("Already enabled it? FluidVoice will update when macOS confirms access.")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(Color.white.opacity(0.42))
+                                        .padding(.top, 2)
+                                }
                             }
-
-                            self.permissionRow(
-                                stepNumber: 2,
-                                title: self.accessibilityPermissionTitle,
-                                subtitle: self.accessibilityPermissionSubtitle,
-                                systemImage: "keyboard.fill",
-                                isReady: self.isAccessibilityReady,
-                                statusTitle: self.accessibilityPermissionStatusTitle,
-                                actionTitle: self.accessibilityPermissionActionTitle
-                            ) {
-                                self.openAccessibilitySettings()
-                            }
-
-                            if !self.isAccessibilityReady {
-                                Text("Already enabled it? FluidVoice will update when macOS confirms access.")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(Color.white.opacity(0.42))
-                                    .padding(.top, 2)
-                            }
+                            .frame(width: 560)
                         }
-                        .frame(width: 560)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 34)
+                        .padding(.bottom, 12)
                     }
-                    .frame(maxWidth: .infinity)
-
-                    Spacer(minLength: 28)
 
                     self.cinematicFooter(
                         continueTitle: "Continue",
@@ -1714,44 +1704,43 @@ struct OnboardingFlowView: View {
                     FluidOnboardingCompactProgress(value: self.compactProgressValue)
                         .padding(.top, 28)
 
-                    Color.clear
-                        .frame(height: 34)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark(size: 66)
+                                .padding(.bottom, 22)
 
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark(size: 66)
-                            .padding(.bottom, 22)
+                            Text("FluidVoice is ready.")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.74)
+                                .padding(.horizontal, 32)
+                                .padding(.bottom, 14)
 
-                        Text("FluidVoice is ready.")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.74)
-                            .padding(.horizontal, 32)
-                            .padding(.bottom, 14)
+                            Text("Now let's try it out.")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                                .padding(.bottom, 28)
 
-                        Text("Now let's try it out.")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.62))
-                            .padding(.bottom, 28)
-
-                        OnboardingTryoutStepView(
-                            finalText: Binding(
-                                get: { self.asr.finalText },
-                                set: { self.asr.finalText = $0 }
-                            ),
-                            language: self.selectedOnboardingLanguage,
-                            shortcutDisplay: self.onboardingShortcutDisplay,
-                            isReady: self.isPlaygroundReady,
-                            isRunning: self.asr.isRunning,
-                            isRecordingShortcut: self.activeShortcutRecordingTarget == .primaryDictation,
-                            shortcutRecordingMessage: self.activeShortcutRecordingTarget == .primaryDictation ? self.shortcutRecordingMessage : nil,
-                            onToggleShortcut: self.togglePrimaryShortcutRecording
-                        )
+                            OnboardingTryoutStepView(
+                                finalText: Binding(
+                                    get: { self.asr.finalText },
+                                    set: { self.asr.finalText = $0 }
+                                ),
+                                language: self.selectedOnboardingLanguage,
+                                shortcutDisplay: self.onboardingShortcutDisplay,
+                                isReady: self.isPlaygroundReady,
+                                isRunning: self.asr.isRunning,
+                                isRecordingShortcut: self.activeShortcutRecordingTarget == .primaryDictation,
+                                shortcutRecordingMessage: self.activeShortcutRecordingTarget == .primaryDictation ? self.shortcutRecordingMessage : nil,
+                                onToggleShortcut: self.togglePrimaryShortcutRecording
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 34)
+                        .padding(.bottom, 12)
                     }
-                    .frame(maxWidth: .infinity)
-
-                    Spacer(minLength: 28)
 
                     self.cinematicFooter(
                         continueTitle: "Continue",
@@ -2005,9 +1994,21 @@ struct OnboardingFlowView: View {
                         ProgressView(value: progress)
                             .tint(FluidOnboardingLandingColors.blue)
 
-                        Text(progress >= 0.82 ? "Finalizing..." : "Downloading \(Int(progress * 100))%")
-                            .font(self.theme.typography.captionStrong)
-                            .foregroundStyle(Color.white.opacity(0.56))
+                        HStack(spacing: 6) {
+                            ZStack {
+                                if progress >= 0.82 {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                        .fixedSize()
+                                }
+                            }
+                            .frame(width: 14, height: 14)
+                            .opacity(progress >= 0.82 ? 1 : 0)
+
+                            Text("Downloading \(Int(progress * 100))%")
+                                .font(self.theme.typography.captionStrong)
+                                .foregroundStyle(Color.white.opacity(0.56))
+                        }
                     } else {
                         HStack(spacing: 8) {
                             ProgressView()
