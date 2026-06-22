@@ -2936,8 +2936,9 @@ final class ASRService: ObservableObject {
         var result = text
 
         if smartCapsEnabled {
-            let precedingTrimmed = precedingText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if precedingTrimmed.isEmpty || precedingTrimmed.last?.isSentenceEndingPunctuation == true {
+            let precedingTrimmed = precedingText.trimmingCharacters(in: .whitespaces)
+            let boundaryCharacter = self.lastCapitalizationBoundaryCharacter(in: precedingTrimmed)
+            if boundaryCharacter == nil || boundaryCharacter?.isSentenceEndingPunctuation == true {
                 result = self.replacingFirstLetter(in: result, transform: { $0.uppercased() })
             } else {
                 result = self.replacingFirstLetter(in: result, transform: { $0.lowercased() })
@@ -2960,6 +2961,19 @@ final class ASRService: ObservableObject {
         return result
     }
 
+    private static func lastCapitalizationBoundaryCharacter(in text: String) -> Character? {
+        for character in text.reversed() {
+            if character.isNewline {
+                return nil
+            }
+            if character.isHorizontalWhitespace || character.isClosingPunctuationWrapper {
+                continue
+            }
+            return character
+        }
+        return nil
+    }
+
     private static func replacingFirstLetter(in text: String, transform: (Character) -> String) -> String {
         guard let index = text.firstIndex(where: { $0.isLetter }) else { return text }
         let nextIndex = text.index(after: index)
@@ -2970,6 +2984,19 @@ final class ASRService: ObservableObject {
 private extension Character {
     var isSentenceEndingPunctuation: Bool {
         self == "." || self == "!" || self == "?"
+    }
+
+    var isHorizontalWhitespace: Bool {
+        self.unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) }
+    }
+
+    var isClosingPunctuationWrapper: Bool {
+        switch self {
+        case "\"", "'", "”", "’", "»", "›", ")", "]", "}", "」", "』":
+            return true
+        default:
+            return false
+        }
     }
 }
 

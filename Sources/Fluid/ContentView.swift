@@ -2457,7 +2457,10 @@ struct ContentView: View {
         self.menuBarManager.setProcessing(false)
 
         finalText = ASRService.applyGAAVFormatting(finalText)
-        finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: self.recordingPrecedingText)
+        let precedingText = SettingsStore.shared.needsDictationFormattingContext
+            ? TypingService.textBeforeCursorInFocusedField()
+            : ""
+        finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: precedingText)
         self.recordingPrecedingText = ""
 
         if SettingsStore.shared.saveTranscriptionHistory {
