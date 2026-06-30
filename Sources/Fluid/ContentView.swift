@@ -2954,7 +2954,7 @@ struct ContentView: View {
         Task {
             await self.asr.start(onCaptureStarted: {
                 if shouldPlayStartSound {
-                    TranscriptionSoundPlayer.shared.playStartSound()
+                    self.scheduleTranscriptionStartSound()
                 }
             })
             if !self.asr.isRunning {
@@ -3203,7 +3203,7 @@ struct ContentView: View {
                 )
                 Task {
                     await self.asr.start(onCaptureStarted: {
-                        TranscriptionSoundPlayer.shared.playStartSound()
+                        self.scheduleTranscriptionStartSound()
                     })
                 }
             },
@@ -3239,7 +3239,7 @@ struct ContentView: View {
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
                 Task {
                     await self.asr.start(onCaptureStarted: {
-                        TranscriptionSoundPlayer.shared.playStartSound()
+                        self.scheduleTranscriptionStartSound()
                     })
                 }
             },
@@ -3561,11 +3561,7 @@ extension ContentView {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
             await self.asr.start(onCaptureStarted: {
-                if SettingsStore.shared.enableTranscriptionSounds {
-                    self.appBench("start_sound_start")
-                    TranscriptionSoundPlayer.shared.playStartSound()
-                    self.appBench("start_sound_end")
-                }
+                self.scheduleTranscriptionStartSound(logBenchmarks: true)
             })
             if !self.asr.isRunning {
                 self.appBench("asr_start_failed")
@@ -3598,6 +3594,24 @@ extension ContentView {
         settings.setDictationPromptSelection(selection, for: .secondary)
         self.applyDictationPromptConfiguration(for: selection)
         await self.beginDictationRecording(for: .secondary, mode: mode)
+    }
+
+    private func scheduleTranscriptionStartSound(logBenchmarks: Bool = false) {
+        guard SettingsStore.shared.enableTranscriptionSounds else { return }
+
+        if logBenchmarks {
+            self.appBench("start_sound_scheduled")
+        }
+
+        Task { @MainActor in
+            if logBenchmarks {
+                DebugLogger.shared.benchmark("APP_BENCH", message: "start_sound_start", source: "AppBenchmark")
+            }
+            TranscriptionSoundPlayer.shared.playStartSound()
+            if logBenchmarks {
+                DebugLogger.shared.benchmark("APP_BENCH", message: "start_sound_end", source: "AppBenchmark")
+            }
+        }
     }
 
     private func applyDictationPromptConfiguration(for selection: SettingsStore.DictationPromptSelection) {

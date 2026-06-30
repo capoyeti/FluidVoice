@@ -13,6 +13,7 @@ final class DictationStartProbe: @unchecked Sendable {
     private var lastInputEvent: InputEvent?
     private var activeEvent: InputEvent?
     private var activeTriggerLabel: String?
+    private var firstTapBufferLogged = false
     private var firstAudioLogged = false
 
     private init() {}
@@ -28,6 +29,7 @@ final class DictationStartProbe: @unchecked Sendable {
         self.lock.lock()
         self.activeEvent = self.lastInputEvent
         self.activeTriggerLabel = label
+        self.firstTapBufferLogged = false
         self.firstAudioLogged = false
         let event = self.activeEvent
         self.lock.unlock()
@@ -70,6 +72,33 @@ final class DictationStartProbe: @unchecked Sendable {
         )
     }
 
+    func markFirstTapBuffer(frameLength: Int, sampleRate: Double) {
+        let now = ProcessInfo.processInfo.systemUptime
+        self.lock.lock()
+        guard self.firstTapBufferLogged == false else {
+            self.lock.unlock()
+            return
+        }
+        self.firstTapBufferLogged = true
+        let event = self.activeEvent
+        let label = self.activeTriggerLabel ?? "unknown"
+        self.lock.unlock()
+
+        let callbackDelta = Self.deltaMilliseconds(from: event?.uptime, to: now)
+        let bufferDuration = Self.bufferDurationMilliseconds(frameLength: frameLength, sampleRate: sampleRate)
+        let estimatedFirstSampleDelta = callbackDelta >= 0 && bufferDuration >= 0
+            ? callbackDelta - bufferDuration
+            : -1
+        DebugLogger.shared.benchmark(
+            "START_LATENCY",
+            message: "first_tap_buffer label=\(label) frames=\(frameLength) " +
+                "sampleRate=\(Int(sampleRate.rounded())) event=\(event?.kind ?? "unknown") " +
+                "eventToFirstTapBufferMs=\(callbackDelta) bufferMs=\(bufferDuration) " +
+                "estimatedEventToFirstSampleMs=\(estimatedFirstSampleDelta)",
+            source: "DictationStartProbe"
+        )
+    }
+
     func markFirstAudio(sampleCount: Int) {
         let now = ProcessInfo.processInfo.systemUptime
         self.lock.lock()
@@ -98,6 +127,11 @@ final class DictationStartProbe: @unchecked Sendable {
     private static func deltaMilliseconds(from start: TimeInterval?, to end: TimeInterval) -> Int {
         guard let start else { return -1 }
         return Int(((end - start) * 1000).rounded())
+    }
+
+    private static func bufferDurationMilliseconds(frameLength: Int, sampleRate: Double) -> Int {
+        guard sampleRate > 0 else { return -1 }
+        return Int(((Double(frameLength) / sampleRate) * 1000).rounded())
     }
 
     private static func eventName(_ type: CGEventType) -> String {
