@@ -102,6 +102,18 @@ final class ASRService: ObservableObject {
     private var hasPendingParakeetVocabularyReload: Bool = false
     private var vocabularyChangeObserver: NSObjectProtocol?
 
+    private struct CaptureEngineConfiguration: Equatable {
+        let syncAudioDevicesWithSystem: Bool
+        let preferredInputDeviceUID: String?
+        let preferredOutputDeviceUID: String?
+    }
+
+    private let fastRestartWarmEngineEnabled = true
+    private let fastRestartWarmEngineHoldNanoseconds: UInt64 = 8_000_000_000
+    private var fastRestartWarmEngineShutdownTask: Task<Void, Never>?
+    private var isEngineWarmForFastRestart = false
+    private var warmCaptureEngineConfiguration: CaptureEngineConfiguration?
+
     // MARK: - Error Handling
 
     @Published var errorTitle: String = "Error"
@@ -475,6 +487,9 @@ final class ASRService: ObservableObject {
     func resetTranscriptionProvider() {
         let newModel = SettingsStore.shared.selectedSpeechModel
         DebugLogger.shared.info("ASRService: Switching to '\(newModel.displayName)', resetting provider state...", source: "ASRService")
+        if !self.isRunning, self.isEngineWarmForFastRestart {
+            self.tearDownCaptureEngine(reason: "provider reset while warm", releaseAsync: true)
+        }
 
         self.isAsrReady = false
         self.modelsExistOnDisk = false
@@ -650,6 +665,7 @@ final class ASRService: ObservableObject {
     }
 
     deinit {
+        self.fastRestartWarmEngineShutdownTask?.cancel()
         if let observer = self.vocabularyChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -840,7 +856,10 @@ final class ASRService: ObservableObject {
     /// ## Errors
     /// If audio session configuration fails, the method will silently fail
     /// and `isRunning` will remain `false`. Check the debug logs for details.
-    func start(forDictionaryTraining: Bool = false) async {
+    func start(
+        forDictionaryTraining: Bool = false,
+        onCaptureStarted: (@MainActor () -> Void)? = nil
+    ) async {
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
         guard self.micStatus == .authorized else {
@@ -872,10 +891,12 @@ final class ASRService: ObservableObject {
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
+        DictationStartProbe.shared.markASRStart(session: self.benchmarkSessionID)
         self.streamingChunkAnalyticsSuccessCount = 0
         self.lastStreamingChunkFailureAnalyticsAt = nil
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
         self.audioCapturePipeline.setRecordingEnabled(true)
+        DictationStartProbe.shared.markCaptureEnabled(session: self.benchmarkSessionID)
         self.refreshWordBoostStatus()
         let dims = self.currentTranscriptionAnalyticsDimensions()
         self.benchmarkLog("recording_start model=\(dims.model) provider=\(dims.provider) supportsStreaming=\(SettingsStore.shared.selectedSpeechModel.supportsStreaming)")
@@ -886,17 +907,20 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
-            DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
-            try self.configureSession()
-            DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
+            let reusedWarmEngine = self.reuseWarmCaptureEngineIfAvailable()
+            if reusedWarmEngine {
+                DebugLogger.shared.debug("✅ Warm capture engine reused", source: "ASRService")
+            } else {
+                DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
+                try self.configureSession()
+                DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
 
-            DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
-            try self.startEngine()
-            DebugLogger.shared.debug("✅ startEngine() completed", source: "ASRService")
+                DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
+                try self.startEngine()
+                DebugLogger.shared.debug("✅ startEngine() completed", source: "ASRService")
+            }
 
-            DebugLogger.shared.debug("🎧 Setting up engine tap...", source: "ASRService")
-            try self.setupEngineTap()
-            DebugLogger.shared.debug("✅ Engine tap setup complete", source: "ASRService")
+            onCaptureStarted?()
 
             // Pause system media AFTER successful audio setup but BEFORE setting isRunning
             // This ensures we only pause media when we know recording will succeed
@@ -934,6 +958,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
         } catch {
             self.isDictionaryTrainingCaptureActive = false
+            self.tearDownCaptureEngine(reason: "start failure", releaseAsync: true)
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
 
             // Resume media if we paused it before the failure
@@ -1049,26 +1074,18 @@ final class ASRService: ObservableObject {
         self.stopMonitoringDevice()
         DebugLogger.shared.debug("✅ Device monitoring stopped", source: "ASRService")
 
-        // Stop the audio engine to stop new audio from coming in
-        DebugLogger.shared.debug("🎧 Removing engine tap...", source: "ASRService")
-        self.removeEngineTap()
-        DebugLogger.shared.debug("✅ Engine tap removed", source: "ASRService")
-
-        DebugLogger.shared.debug("🛑 Calling engine.stop()...", source: "ASRService")
-        self.engine.stop()
-        DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
+        if useDictionaryTrainingPath || !self.fastRestartWarmEngineEnabled {
+            DebugLogger.shared.debug("🛑 Tearing down capture engine...", source: "ASRService")
+            self.tearDownCaptureEngine(reason: "recording stopped")
+            DebugLogger.shared.debug("✅ Capture engine torn down", source: "ASRService")
+        } else {
+            self.scheduleFastRestartWarmEngineShutdown(reason: "recording stopped")
+        }
 
         // Capture has fully ended — invoke the callback so callers can play a
         // stop cue or release capture-dependent UI without waiting on the
         // (potentially slow) final transcription pass.
         await MainActor.run { onCaptureStopped?() }
-
-        // Recreate the engine instance instead of calling reset() to prevent format corruption
-        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
-        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
-        self.engineStorage = nil // Explicitly release old engine
-        // New engine will be lazily created on next access via computed property
-        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -1362,20 +1379,10 @@ final class ASRService: ObservableObject {
         // Stop monitoring device
         self.stopMonitoringDevice()
 
-        self.removeEngineTap()
-        DebugLogger.shared.debug("Engine tap removed", source: "ASRService")
-
-        self.engine.stop()
-        DebugLogger.shared.debug("Engine stopped", source: "ASRService")
-
         // Release old engine on a background thread — if the underlying device just died,
         // AVAudioEngine deallocation can block in CoreAudio's internal teardown.
         // No new engine is created here (it's lazy on next start()), so no overlap risk.
-        let oldEngine = self.engineStorage
-        self.engineStorage = nil
-        if let oldEngine {
-            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
-        }
+        self.tearDownCaptureEngine(reason: "stop without transcription", releaseAsync: true)
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -1745,6 +1752,8 @@ final class ASRService: ObservableObject {
         var lastError: Error?
 
         while attempts < 3 {
+            var installedTapThisAttempt = false
+            var startedEngineThisAttempt = false
             do {
                 // CRITICAL: Bind devices BEFORE prepare() - must be set before AudioUnit initialization
                 // Note: This may fail for aggregate devices (Bluetooth, etc.) with OSStatus -10851
@@ -1781,12 +1790,39 @@ final class ASRService: ObservableObject {
                     source: "ASRService"
                 )
 
+                DebugLogger.shared.debug("🎧 Setting up engine tap before engine.start()...", source: "ASRService")
+                do {
+                    try self.setupEngineTap()
+                    installedTapThisAttempt = true
+                    DebugLogger.shared.debug("✅ Pre-start engine tap setup complete", source: "ASRService")
+                } catch {
+                    DebugLogger.shared.warning(
+                        "⚠️ Pre-start tap setup failed; falling back to post-start tap setup: \(error.localizedDescription)",
+                        source: "ASRService"
+                    )
+                }
+
                 try self.engine.start()
+                startedEngineThisAttempt = true
                 DebugLogger.shared.info("AVAudioEngine started successfully on attempt \(attempts + 1)", source: "ASRService")
+
+                if installedTapThisAttempt == false {
+                    DebugLogger.shared.debug("🎧 Setting up engine tap after engine.start() fallback...", source: "ASRService")
+                    try self.setupEngineTap()
+                    installedTapThisAttempt = true
+                    DebugLogger.shared.debug("✅ Post-start engine tap setup complete", source: "ASRService")
+                }
+
                 return
             } catch {
                 lastError = error
                 attempts += 1
+                if installedTapThisAttempt {
+                    self.removeEngineTap()
+                }
+                if startedEngineThisAttempt || self.engine.isRunning {
+                    self.engine.stop()
+                }
 
                 // Log the actual error from AVFoundation
                 DebugLogger.shared.error(
@@ -1826,7 +1862,100 @@ final class ASRService: ObservableObject {
     }
 
     private func removeEngineTap() {
-        self.engine.inputNode.removeTap(onBus: 0)
+        guard let engine = self.engineStorage as? AVAudioEngine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
+    private func cancelFastRestartWarmEngineShutdown() {
+        self.fastRestartWarmEngineShutdownTask?.cancel()
+        self.fastRestartWarmEngineShutdownTask = nil
+    }
+
+    private func currentCaptureEngineConfiguration() -> CaptureEngineConfiguration {
+        CaptureEngineConfiguration(
+            syncAudioDevicesWithSystem: SettingsStore.shared.syncAudioDevicesWithSystem,
+            preferredInputDeviceUID: SettingsStore.shared.preferredInputDeviceUID,
+            preferredOutputDeviceUID: SettingsStore.shared.preferredOutputDeviceUID
+        )
+    }
+
+    private func tearDownCaptureEngine(reason: String, releaseAsync: Bool = false) {
+        self.cancelFastRestartWarmEngineShutdown()
+        self.isEngineWarmForFastRestart = false
+        self.warmCaptureEngineConfiguration = nil
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        self.removeEngineTap()
+
+        let engineToStop = self.engineStorage as? AVAudioEngine
+        if engineToStop?.isRunning == true {
+            engineToStop?.stop()
+        }
+
+        let oldEngine = self.engineStorage
+        self.engineStorage = nil
+        DebugLogger.shared.debug("Capture engine torn down: \(reason)", source: "ASRService")
+
+        guard releaseAsync, let oldEngine else { return }
+        DispatchQueue.global(qos: .utility).async { _ = oldEngine }
+    }
+
+    private func scheduleFastRestartWarmEngineShutdown(reason: String) {
+        guard self.fastRestartWarmEngineEnabled,
+              let currentEngine = self.engineStorage as? AVAudioEngine,
+              currentEngine.isRunning
+        else {
+            self.tearDownCaptureEngine(reason: reason)
+            return
+        }
+
+        self.cancelFastRestartWarmEngineShutdown()
+        self.isEngineWarmForFastRestart = true
+        self.warmCaptureEngineConfiguration = self.currentCaptureEngineConfiguration()
+        let delay = self.fastRestartWarmEngineHoldNanoseconds
+        DebugLogger.shared.info("Keeping capture engine warm for fast restart: \(reason)", source: "ASRService")
+
+        self.fastRestartWarmEngineShutdownTask = Task { @MainActor [weak self, weak currentEngine] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+
+            guard let self,
+                  !self.isRunning,
+                  self.isEngineWarmForFastRestart,
+                  let storedEngine = self.engineStorage as? AVAudioEngine,
+                  storedEngine === currentEngine
+            else { return }
+
+            self.tearDownCaptureEngine(reason: "fast restart warm window expired")
+        }
+    }
+
+    private func reuseWarmCaptureEngineIfAvailable() -> Bool {
+        guard self.fastRestartWarmEngineEnabled, self.isEngineWarmForFastRestart else { return false }
+
+        guard let warmEngine = self.engineStorage as? AVAudioEngine,
+              warmEngine.isRunning
+        else {
+            self.tearDownCaptureEngine(reason: "warm engine unavailable")
+            self.audioCapturePipeline.setRecordingEnabled(true)
+            return false
+        }
+
+        guard self.warmCaptureEngineConfiguration == self.currentCaptureEngineConfiguration() else {
+            self.tearDownCaptureEngine(reason: "audio settings changed while warm")
+            self.audioCapturePipeline.setRecordingEnabled(true)
+            return false
+        }
+
+        self.cancelFastRestartWarmEngineShutdown()
+        self.isEngineWarmForFastRestart = false
+        self.warmCaptureEngineConfiguration = nil
+        DictationStartProbe.shared.markTapInstalled(session: self.benchmarkSessionID)
+        self.benchmarkLog("warm_engine_reuse reused=true")
+        DebugLogger.shared.info("Reusing warm capture engine for fast restart", source: "ASRService")
+        return true
     }
 
     private func setupEngineTap() throws {
@@ -1887,11 +2016,15 @@ final class ASRService: ObservableObject {
         input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
             pipeline.handle(buffer: buffer)
         }
+        DictationStartProbe.shared.markTapInstalled(session: self.benchmarkSessionID)
         DebugLogger.shared.debug("✅ setupEngineTap() - COMPLETED", source: "ASRService")
     }
 
     private func scheduleAudioRouteRecovery(reason: String) {
         guard self.isRunning else {
+            if self.isEngineWarmForFastRestart {
+                self.tearDownCaptureEngine(reason: "audio route changed while warm: \(reason)", releaseAsync: true)
+            }
             self.audioLevelSubject.send(0.0)
             return
         }
@@ -1931,19 +2064,11 @@ final class ASRService: ObservableObject {
         self.audioCapturePipeline.setRecordingEnabled(false)
 
         self.stopMonitoringDevice()
-        self.removeEngineTap()
-        self.engine.stop()
-
-        let oldEngine = self.engineStorage
-        self.engineStorage = nil
-        if let oldEngine {
-            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
-        }
+        self.tearDownCaptureEngine(reason: "audio route recovery", releaseAsync: true)
 
         do {
             try self.configureSession()
             try self.startEngine()
-            try self.setupEngineTap()
             self.audioCapturePipeline.setRecordingEnabled(true)
 
             if let currentDevice = self.getCurrentlyBoundInputDevice() {
@@ -3239,11 +3364,16 @@ private final class AudioCapturePipeline {
 
     func setRecordingEnabled(_ enabled: Bool) {
         self.lock.lock()
-        defer { self.lock.unlock() }
         self.recordingEnabled = enabled
+        let shouldResetLevel = enabled == false
         if enabled == false {
             self.levelHistory.removeAll(keepingCapacity: true)
             self.smoothedLevel = 0.0
+        }
+        self.lock.unlock()
+
+        if shouldResetLevel {
+            self.onLevel(0.0)
         }
     }
 
@@ -3252,10 +3382,7 @@ private final class AudioCapturePipeline {
         let enabled = self.recordingEnabled
         self.lock.unlock()
 
-        guard enabled else {
-            self.onLevel(0.0)
-            return
-        }
+        guard enabled else { return }
 
         let mono16k = Self.toMono16k(floatBuffer: buffer)
         guard mono16k.isEmpty == false else {
@@ -3264,6 +3391,7 @@ private final class AudioCapturePipeline {
         }
 
         self.audioBuffer.append(mono16k)
+        DictationStartProbe.shared.markFirstAudio(sampleCount: mono16k.count)
         let level = self.calculateAudioLevel(mono16k)
         self.onLevel(level)
     }

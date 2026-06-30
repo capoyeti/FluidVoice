@@ -606,6 +606,7 @@ final class GlobalHotkeyManager: NSObject {
         if let tapRecoveryResult = self.handleTapDisableEvent(type: type, event: event) {
             return tapRecoveryResult
         }
+        DictationStartProbe.shared.markInputEvent(type: type, uptime: TimeInterval(event.timestamp) / 1_000_000_000)
 
         if self.isShortcutCaptureActiveProvider?() ?? false {
             self.resetModifierOnlyShortcutTracking()
@@ -1726,6 +1727,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func triggerDictationMode() {
+        DictationStartProbe.shared.markStartTrigger(label: "dictationMode")
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             guard self.canTriggerRecordingAction("Dictate mode hotkey") else { return }
@@ -1814,6 +1816,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func startRecordingIfNeeded() {
+        DictationStartProbe.shared.markStartTrigger(label: "startRecordingIfNeeded")
         Task { @MainActor [weak self] in
             guard let self = self else { return }
 

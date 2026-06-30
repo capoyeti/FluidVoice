@@ -2949,12 +2949,14 @@ struct ContentView: View {
             self.menuBarManager.showRecordingOverlayImmediately()
         }
 
-        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
+        let shouldPlayStartSound = !self.isRecordingForCommand && !self.isRecordingForRewrite
 
         Task {
-            await self.asr.start()
+            await self.asr.start(onCaptureStarted: {
+                if shouldPlayStartSound {
+                    TranscriptionSoundPlayer.shared.playStartSound()
+                }
+            })
             if !self.asr.isRunning {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
             }
@@ -3167,7 +3169,7 @@ struct ContentView: View {
                     "ContentView: selected model for dictate hotkey=\(SettingsStore.shared.selectedSpeechModel.displayName)",
                     source: "ContentView"
                 )
-                self.beginDictationRecording(for: .primary, mode: .dictate)
+                await self.beginDictationRecording(for: .primary, mode: .dictate)
             },
             stopAndProcessCallback: {
                 let route = self.currentDictationOutputRouteForHotkeyStop()
@@ -3176,11 +3178,11 @@ struct ContentView: View {
             },
             promptModeCallback: {
                 DebugLogger.shared.info("Prompt mode triggered", source: "ContentView")
-                self.beginDictationRecording(for: .secondary, mode: .promptMode)
+                await self.beginDictationRecording(for: .secondary, mode: .promptMode)
             },
             promptSelectionCallback: { selection in
                 DebugLogger.shared.info("Prompt selection shortcut triggered", source: "ContentView")
-                self.beginDictationRecording(for: selection, mode: .promptMode)
+                await self.beginDictationRecording(for: selection, mode: .promptMode)
             },
             commandModeCallback: {
                 DebugLogger.shared.info("Command mode triggered", source: "ContentView")
@@ -3199,9 +3201,10 @@ struct ContentView: View {
                     "Starting voice recording for command",
                     source: "ContentView"
                 )
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
-                    await self.asr.start()
+                    await self.asr.start(onCaptureStarted: {
+                        TranscriptionSoundPlayer.shared.playStartSound()
+                    })
                 }
             },
             rewriteModeCallback: {
@@ -3234,9 +3237,10 @@ struct ContentView: View {
 
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
-                    await self.asr.start()
+                    await self.asr.start(onCaptureStarted: {
+                        TranscriptionSoundPlayer.shared.playStartSound()
+                    })
                 }
             },
             isDictateRecordingProvider: {
@@ -3532,7 +3536,7 @@ extension ContentView {
         }
     }
 
-    private func beginDictationRecording(for slot: SettingsStore.DictationShortcutSlot, mode: ActiveRecordingMode) {
+    private func beginDictationRecording(for slot: SettingsStore.DictationShortcutSlot, mode: ActiveRecordingMode) async {
         DebugLogger.shared.debug("Begin dictation recording for slot \(slot.rawValue)", source: "ContentView")
         self.appBench("begin_recording slot=\(slot.rawValue) mode=\(mode.rawValue)")
         if self.isOnboardingVoicePlaygroundStepActive {
@@ -3542,30 +3546,30 @@ extension ContentView {
             self.settings.playgroundUsed = false
             self.playgroundUsed = false
         }
-        self.captureRecordingContext()
-        self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
+        self.appBench("pre_asr_state_start")
         self.applyDictationShortcutSelectionContext(for: slot)
         self.setActiveRecordingMode(mode)
         self.rewriteModeService.clearState()
-        self.appBench("overlay_mode_request mode=Dictation")
-        self.menuBarManager.setOverlayMode(.dictation)
-        self.menuBarManager.showRecordingOverlayImmediately()
-        self.appBench("overlay_mode_requested mode=Dictation")
-        self.prewarmPrivateAIDictationIfNeeded(for: slot)
+        self.appBench("pre_asr_state_end")
 
-        guard !self.asr.isRunning else {
+        let wasAlreadyRunning = self.asr.isRunning
+        if wasAlreadyRunning {
             self.appBench("asr_start_skipped reason=already_running")
-            return
         }
-        if SettingsStore.shared.enableTranscriptionSounds {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
-        Task {
+
+        if !wasAlreadyRunning {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
-            await self.asr.start()
+            await self.asr.start(onCaptureStarted: {
+                if SettingsStore.shared.enableTranscriptionSounds {
+                    self.appBench("start_sound_start")
+                    TranscriptionSoundPlayer.shared.playStartSound()
+                    self.appBench("start_sound_end")
+                }
+            })
             if !self.asr.isRunning {
-                self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
+                self.appBench("asr_start_failed")
+                return
             }
             DebugLogger.shared.benchmark(
                 "APP_BENCH",
@@ -3573,13 +3577,27 @@ extension ContentView {
                 source: "AppBenchmark"
             )
         }
+
+        self.appBench("capture_context_start")
+        self.captureRecordingContext()
+        self.appBench("capture_context_end")
+        self.appBench("prompt_config_start")
+        self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
+        self.appBench("prompt_config_end")
+        self.appBench("overlay_mode_request mode=Dictation")
+        self.menuBarManager.setOverlayMode(.dictation)
+        self.menuBarManager.showRecordingOverlayImmediately()
+        self.appBench("overlay_mode_requested mode=Dictation")
+        self.appBench("prewarm_private_ai_start")
+        self.prewarmPrivateAIDictationIfNeeded(for: slot)
+        self.appBench("prewarm_private_ai_end")
     }
 
-    private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) {
+    private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) async {
         let settings = SettingsStore.shared
         settings.setDictationPromptSelection(selection, for: .secondary)
         self.applyDictationPromptConfiguration(for: selection)
-        self.beginDictationRecording(for: .secondary, mode: mode)
+        await self.beginDictationRecording(for: .secondary, mode: mode)
     }
 
     private func applyDictationPromptConfiguration(for selection: SettingsStore.DictationPromptSelection) {
