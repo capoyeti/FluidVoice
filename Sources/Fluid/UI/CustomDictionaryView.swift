@@ -37,7 +37,9 @@ struct CustomDictionaryView: View {
     @State private var trainingStatusMessage = "Type the correct text."
     @State private var trainingHasError = false
     @State private var isTrainingActive = false
+    @State private var isTrainingStarting = false
     @State private var isTrainingRecording = false
+    @State private var trainingStopRequestedDuringStart = false
     @State private var isTrainingProcessing = false
     @State private var replacementConfirmation: ReplacementConfirmation?
     @State private var composerMode: DictionaryComposerMode = .train
@@ -62,12 +64,19 @@ struct CustomDictionaryView: View {
     }
 
     private var canUseTrainingRecorderButton: Bool {
-        self.isTrainingRecording || self.canRecordTrainingSample
+        guard !self.trainingStopRequestedDuringStart, !self.isTrainingProcessing else { return false }
+        return self.isTrainingRecording || self.canRecordTrainingSample
     }
 
     private var trainingRecorderTitle: String {
+        if self.trainingStopRequestedDuringStart {
+            return "Stopping..."
+        }
         if self.isTrainingProcessing {
             return "Working..."
+        }
+        if self.isTrainingStarting {
+            return "Starting..."
         }
         if self.isTrainingRecording {
             return "Listening..."
@@ -981,19 +990,44 @@ struct CustomDictionaryView: View {
         self.isTrainingActive = true
         self.trainingHasError = false
         self.trainingStatusMessage = ""
+        self.trainingStopRequestedDuringStart = false
+        self.isTrainingStarting = true
         self.isTrainingRecording = true
 
         await self.asr.start(forDictionaryTraining: true)
+        self.isTrainingStarting = false
         if !self.asr.isRunning {
             self.isTrainingRecording = false
+            self.trainingStopRequestedDuringStart = false
             self.trainingHasError = true
             self.trainingStatusMessage = "Couldn't start recording. Check microphone access and try again."
+            return
+        }
+
+        if self.trainingStopRequestedDuringStart {
+            await self.finishTrainingSampleStop()
         }
     }
 
     private func stopTrainingSample() async {
         guard self.isTrainingRecording else { return }
+        guard !self.trainingStopRequestedDuringStart else { return }
+
+        guard !self.isTrainingStarting, self.asr.isRunning else {
+            self.trainingStopRequestedDuringStart = true
+            self.trainingHasError = false
+            self.trainingStatusMessage = "Stopping..."
+            return
+        }
+
+        await self.finishTrainingSampleStop()
+    }
+
+    private func finishTrainingSampleStop() async {
+        guard self.isTrainingRecording else { return }
         self.isTrainingRecording = false
+        self.isTrainingStarting = false
+        self.trainingStopRequestedDuringStart = false
         self.isTrainingProcessing = true
         self.trainingHasError = false
         self.trainingStatusMessage = ""
@@ -1120,7 +1154,9 @@ struct CustomDictionaryView: View {
         self.trainingStatusMessage = statusMessage
         self.trainingHasError = false
         self.isTrainingActive = false
+        self.isTrainingStarting = false
         self.isTrainingRecording = false
+        self.trainingStopRequestedDuringStart = false
         self.isTrainingProcessing = false
     }
 
