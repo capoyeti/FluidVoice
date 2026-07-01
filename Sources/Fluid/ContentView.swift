@@ -3555,6 +3555,14 @@ extension ContentView {
         self.rewriteModeService.clearState()
         self.appBench("pre_asr_state_end")
 
+        self.appBench("prompt_config_start")
+        self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
+        self.appBench("prompt_config_end")
+        self.appBench("overlay_mode_request mode=Dictation")
+        self.menuBarManager.setOverlayMode(.dictation)
+        self.menuBarManager.showRecordingOverlayImmediately()
+        self.appBench("overlay_mode_requested mode=Dictation")
+
         let wasAlreadyRunning = self.asr.isRunning
         if wasAlreadyRunning {
             self.appBench("asr_start_skipped reason=already_running")
@@ -3568,6 +3576,7 @@ extension ContentView {
             })
             if !self.asr.isRunning {
                 self.appBench("asr_start_failed")
+                self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
                 return
             }
             DebugLogger.shared.benchmark(
@@ -3577,13 +3586,6 @@ extension ContentView {
             )
         }
 
-        self.appBench("prompt_config_start")
-        self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
-        self.appBench("prompt_config_end")
-        self.appBench("overlay_mode_request mode=Dictation")
-        self.menuBarManager.setOverlayMode(.dictation)
-        self.menuBarManager.showRecordingOverlayImmediately()
-        self.appBench("overlay_mode_requested mode=Dictation")
         self.appBench("prewarm_private_ai_start")
         self.prewarmPrivateAIDictationIfNeeded(for: slot)
         self.appBench("prewarm_private_ai_end")
