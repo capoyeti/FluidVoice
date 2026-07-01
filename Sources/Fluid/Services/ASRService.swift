@@ -871,7 +871,7 @@ final class ASRService: ObservableObject {
     /// and `isRunning` will remain `false`. Check the debug logs for details.
     func start(
         forDictionaryTraining: Bool = false,
-        onCaptureStarted: (@MainActor () -> Void)? = nil
+        beforeCaptureEnabled: (@MainActor () async -> Void)? = nil
     ) async {
         let startBenchmarkStartedAt = Date().timeIntervalSince1970
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
@@ -910,8 +910,7 @@ final class ASRService: ObservableObject {
         self.streamingChunkAnalyticsSuccessCount = 0
         self.lastStreamingChunkFailureAnalyticsAt = nil
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
-        self.audioCapturePipeline.setRecordingEnabled(true)
-        DictationStartProbe.shared.markCaptureEnabled(session: self.benchmarkSessionID)
+        self.audioCapturePipeline.setRecordingEnabled(false)
         self.refreshWordBoostStatus()
         let dims = self.currentTranscriptionAnalyticsDimensions()
         self.benchmarkLog("recording_start model=\(dims.model) provider=\(dims.provider) supportsStreaming=\(SettingsStore.shared.selectedSpeechModel.supportsStreaming)")
@@ -951,7 +950,7 @@ final class ASRService: ObservableObject {
             }
 
             let captureCallbackStartedAt = Date().timeIntervalSince1970
-            onCaptureStarted?()
+            await beforeCaptureEnabled?()
             self.benchmarkLog(
                 "start_capture_callback elapsedMs=\(self.elapsedMilliseconds(since: captureCallbackStartedAt)) totalMs=\(self.elapsedMilliseconds(since: startBenchmarkStartedAt))"
             )
@@ -972,6 +971,9 @@ final class ASRService: ObservableObject {
                     "elapsedMs=\(self.elapsedMilliseconds(since: mediaPauseStartedAt)) " +
                     "totalMs=\(self.elapsedMilliseconds(since: startBenchmarkStartedAt))"
             )
+
+            self.audioCapturePipeline.setRecordingEnabled(true)
+            DictationStartProbe.shared.markCaptureEnabled(session: self.benchmarkSessionID)
 
             self.isRunning = true
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
@@ -2211,13 +2213,13 @@ final class ASRService: ObservableObject {
               warmEngine.isRunning
         else {
             self.tearDownCaptureEngine(reason: "warm engine unavailable")
-            self.audioCapturePipeline.setRecordingEnabled(true)
+            self.audioCapturePipeline.setRecordingEnabled(false)
             return false
         }
 
         guard self.warmCaptureEngineConfiguration == self.currentCaptureEngineConfiguration() else {
             self.tearDownCaptureEngine(reason: "audio settings changed while warm")
-            self.audioCapturePipeline.setRecordingEnabled(true)
+            self.audioCapturePipeline.setRecordingEnabled(false)
             return false
         }
 

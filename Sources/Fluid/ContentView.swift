@@ -2952,9 +2952,9 @@ struct ContentView: View {
         let shouldPlayStartSound = !self.isRecordingForCommand && !self.isRecordingForRewrite
 
         Task {
-            await self.asr.start(onCaptureStarted: {
+            await self.asr.start(beforeCaptureEnabled: {
                 if shouldPlayStartSound {
-                    self.scheduleTranscriptionStartSound()
+                    await self.playTranscriptionStartSoundBeforeCapture()
                 }
             })
             if !self.asr.isRunning {
@@ -3202,8 +3202,8 @@ struct ContentView: View {
                     source: "ContentView"
                 )
                 Task {
-                    await self.asr.start(onCaptureStarted: {
-                        self.scheduleTranscriptionStartSound()
+                    await self.asr.start(beforeCaptureEnabled: {
+                        await self.playTranscriptionStartSoundBeforeCapture()
                     })
                 }
             },
@@ -3238,8 +3238,8 @@ struct ContentView: View {
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
                 Task {
-                    await self.asr.start(onCaptureStarted: {
-                        self.scheduleTranscriptionStartSound()
+                    await self.asr.start(beforeCaptureEnabled: {
+                        await self.playTranscriptionStartSoundBeforeCapture()
                     })
                 }
             },
@@ -3546,6 +3546,9 @@ extension ContentView {
             self.settings.playgroundUsed = false
             self.playgroundUsed = false
         }
+        self.appBench("capture_context_start")
+        self.captureRecordingContext()
+        self.appBench("capture_context_end")
         self.appBench("pre_asr_state_start")
         self.applyDictationShortcutSelectionContext(for: slot)
         self.setActiveRecordingMode(mode)
@@ -3560,8 +3563,8 @@ extension ContentView {
         if !wasAlreadyRunning {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
-            await self.asr.start(onCaptureStarted: {
-                self.scheduleTranscriptionStartSound(logBenchmarks: true)
+            await self.asr.start(beforeCaptureEnabled: {
+                await self.playTranscriptionStartSoundBeforeCapture(logBenchmarks: true)
             })
             if !self.asr.isRunning {
                 self.appBench("asr_start_failed")
@@ -3574,9 +3577,6 @@ extension ContentView {
             )
         }
 
-        self.appBench("capture_context_start")
-        self.captureRecordingContext()
-        self.appBench("capture_context_end")
         self.appBench("prompt_config_start")
         self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
         self.appBench("prompt_config_end")
@@ -3596,21 +3596,29 @@ extension ContentView {
         await self.beginDictationRecording(for: .secondary, mode: mode)
     }
 
-    private func scheduleTranscriptionStartSound(logBenchmarks: Bool = false) {
+    private func playTranscriptionStartSoundBeforeCapture(logBenchmarks: Bool = false) async {
         guard SettingsStore.shared.enableTranscriptionSounds else { return }
 
         if logBenchmarks {
-            self.appBench("start_sound_scheduled")
+            self.appBench("start_sound_start")
         }
 
-        Task { @MainActor in
-            if logBenchmarks {
-                DebugLogger.shared.benchmark("APP_BENCH", message: "start_sound_start", source: "AppBenchmark")
-            }
-            TranscriptionSoundPlayer.shared.playStartSound()
-            if logBenchmarks {
-                DebugLogger.shared.benchmark("APP_BENCH", message: "start_sound_end", source: "AppBenchmark")
-            }
+        let duration = TranscriptionSoundPlayer.shared.playStartSound()
+        let gateSeconds = min(max(duration + 0.04, 0), 1.0)
+        if logBenchmarks {
+            DebugLogger.shared.benchmark(
+                "APP_BENCH",
+                message: "start_sound_played durationMs=\(Int((duration * 1000).rounded())) gateMs=\(Int((gateSeconds * 1000).rounded()))",
+                source: "AppBenchmark"
+            )
+        }
+
+        if gateSeconds > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(gateSeconds * 1_000_000_000))
+        }
+
+        if logBenchmarks {
+            self.appBench("start_sound_gate_done")
         }
     }
 
