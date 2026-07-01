@@ -1030,8 +1030,6 @@ final class GlobalHotkeyManager: NSObject {
                 ) { return nil }
             }
 
-            self.handlePrimaryDictationShortcutPrewarmFlagsChanged(modifiers: eventModifiers)
-
         default:
             break
         }
@@ -1129,28 +1127,6 @@ final class GlobalHotkeyManager: NSObject {
     ) {
         guard behavior.holdModeType == .transcription else { return }
         self.cancelPrimaryDictationShortcutPrewarmIfNeeded(reason: reason)
-    }
-
-    private func handlePrimaryDictationShortcutPrewarmFlagsChanged(modifiers: NSEvent.ModifierFlags) {
-        guard self.asrService.isRunning == false else {
-            self.cancelPrimaryDictationShortcutPrewarmIfNeeded(reason: "primary dictation already running")
-            return
-        }
-
-        let relevantModifiers = modifiers.intersection(HotkeyShortcut.relevantModifierMask)
-        let matchingShortcut = self.primaryShortcuts.contains { shortcut in
-            guard !shortcut.isModifierOnlyShortcut,
-                  !shortcut.relevantModifierFlags.isEmpty
-            else { return false }
-
-            return shortcut.relevantModifierFlags == relevantModifiers
-        }
-
-        if matchingShortcut {
-            self.prewarmPrimaryDictationShortcutIfNeeded(reason: "primary dictation modifier prefix down")
-        } else {
-            self.cancelPrimaryDictationShortcutPrewarmIfNeeded(reason: "primary dictation modifier prefix changed")
-        }
     }
 
     private func handleAutomaticKeyRelease(
