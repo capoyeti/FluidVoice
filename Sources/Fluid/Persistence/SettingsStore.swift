@@ -1635,13 +1635,13 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var parakeetFinalizationMode: ParakeetFinalizationMode {
-        get {
-            self.defaults.string(forKey: Keys.parakeetFinalizationMode).flatMap(ParakeetFinalizationMode.init(rawValue:)) ?? .stableFullFinal
-        }
+    /// Experimental direct Core Audio capture. Default is deliberately off
+    /// until the low-latency backend has broader device coverage validation.
+    var experimentalDirectAudioCaptureEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.experimentalDirectAudioCaptureEnabled) }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.parakeetFinalizationMode)
+            self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
     }
 
@@ -4128,15 +4128,6 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        var supportsFastDictationProcessing: Bool {
-            switch self {
-            case .parakeetTDT, .parakeetTDTv2:
-                return true
-            default:
-                return false
-            }
-        }
-
         /// Whether this model supports real-time streaming/chunk processing.
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
@@ -4461,7 +4452,7 @@ private extension SettingsStore {
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
-        static let parakeetFinalizationMode = "ParakeetFinalizationMode"
+        static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"

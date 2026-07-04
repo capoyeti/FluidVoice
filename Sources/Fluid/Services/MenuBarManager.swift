@@ -48,9 +48,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var pendingProcessingShowOperation: DispatchWorkItem?
     /// Show immediately so users see the processing state right away.
     private let processingVisualDelay: DispatchTimeInterval = .milliseconds(0)
-    /// Debounce the hide so a fast transcription doesn't flash the processing
-    /// overlay for a single frame. 80ms is under the perception threshold but
-    /// long enough to coalesce a quick show->hide cycle.
+    /// Legacy debounce used by generic processing callers. Successful dictation
+    /// completion dispatches output first, then hides the overlay asynchronously.
     private let processingHideDelay: DispatchTimeInterval = .milliseconds(80)
 
     /// Subscription for forwarding audio levels to expanded command notch
@@ -354,6 +353,44 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.overlayBench("processing_forwarded processing=false hideDelayMs=80")
             return
         }
+    }
+
+    /// Ends processing and waits for the recording overlay's exit transition.
+    /// Output paths normally call this asynchronously after insertion dispatch
+    /// so the exit animation cannot delay text delivery.
+    func finishProcessingAndHideOverlay() async {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        self.cancelPendingProcessingCompletionOperations()
+        self.isProcessingActive = false
+        self.overlayVisible = false
+
+        NotchOverlayManager.shared.setProcessing(false)
+        self.overlayBench("finish_hide_request")
+        await NotchOverlayManager.shared.hideAndWait()
+        self.overlayBench(
+            "finish_hide_complete elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))"
+        )
+    }
+
+    /// Ends processing without dismissing an actionable overlay, such as the
+    /// AI fallback state that offers reprocessing and settings actions.
+    func finishProcessingKeepingOverlayVisible() {
+        self.cancelPendingProcessingCompletionOperations()
+        self.isProcessingActive = false
+        // Keep the physical overlay visible, but release recording/processing
+        // ownership so the next recording can establish a fresh lifecycle.
+        self.overlayVisible = false
+        NotchOverlayManager.shared.setProcessing(false)
+        self.overlayBench("finish_keep_visible")
+    }
+
+    private func cancelPendingProcessingCompletionOperations() {
+        self.pendingProcessingShowOperation?.cancel()
+        self.pendingProcessingShowOperation = nil
+        self.pendingHideOperation?.cancel()
+        self.pendingHideOperation = nil
+        self.pendingShowOperation?.cancel()
+        self.pendingShowOperation = nil
     }
 
     private func overlayBench(_ message: String) {

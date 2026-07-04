@@ -1511,39 +1511,7 @@ struct SettingsView: View {
                             .foregroundStyle(.primary)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Dictation Processing Speed")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                }
-
-                                Spacer()
-
-                                Picker("", selection: Binding(
-                                    get: {
-                                        self.settings.selectedSpeechModel.supportsFastDictationProcessing
-                                            ? self.settings.parakeetFinalizationMode
-                                            : .stableFullFinal
-                                    },
-                                    set: { mode in
-                                        if self.settings.selectedSpeechModel.supportsFastDictationProcessing {
-                                            self.settings.parakeetFinalizationMode = mode
-                                        }
-                                    }
-                                )) {
-                                    ForEach(ParakeetFinalizationMode.allCases) { mode in
-                                        Text(mode.displayName).tag(mode)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 170, alignment: .trailing)
-                                .disabled(self.asr.isRunning || !self.settings.selectedSpeechModel.supportsFastDictationProcessing)
-                            }
-
-                            Text(self.settings.selectedSpeechModel.supportsFastDictationProcessing ? "Standard: most reliable. Fast: faster, but maybe inaccurate." : "Fast processing is available for Parakeet TDT v2 and v3.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
+                            self.lowLatencyAudioCaptureToggle
 
                             if self.asr.isRunning {
                                 Text("Settings are disabled during active recording")
@@ -2538,6 +2506,28 @@ struct FlowLayout: Layout {
 
         cache.containerSize = CGSize(width: maxWidth, height: y + rowHeight)
         cache.lastWidth = maxWidth
+    }
+}
+
+private extension SettingsView {
+    var lowLatencyAudioCaptureToggle: some View {
+        Group {
+            self.settingsToggleRow(
+                title: "Low-Latency Audio Capture",
+                description: "Use the experimental direct Core Audio input path for faster recording startup. Turn this off if a microphone behaves unexpectedly.",
+                footnote: "Off by default while device compatibility is being validated.",
+                isOn: Binding(
+                    get: { self.settings.experimentalDirectAudioCaptureEnabled },
+                    set: { enabled in
+                        self.settings.experimentalDirectAudioCaptureEnabled = enabled
+                        self.asr.refreshAudioCaptureBackendPreference()
+                    }
+                )
+            )
+            .disabled(self.asr.isRunning)
+
+            Divider().padding(.vertical, 8)
+        }
     }
 }
 
