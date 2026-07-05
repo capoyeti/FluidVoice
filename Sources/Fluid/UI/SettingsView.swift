@@ -31,6 +31,7 @@ struct SettingsView: View {
     @Binding var visualizerNoiseThreshold: Double
     @Binding var selectedInputUID: String
     @Binding var selectedOutputUID: String
+    @Binding var microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode
     @Binding var inputDevices: [AudioDevice.Device]
     @Binding var outputDevices: [AudioDevice.Device]
     @Binding var accessibilityEnabled: Bool
@@ -1070,18 +1071,11 @@ struct SettingsView: View {
                         }
 
                         // Info note about device syncing
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .font(self.theme.typography.bodyStrong)
-                            Text("Audio devices are synced with macOS System Settings.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 4)
+                        self.microphoneModeInfo
 
                         VStack(alignment: .leading, spacing: 12) {
+                            self.microphoneModeToggle
+
                             HStack {
                                 Text("Input Device")
                                     .font(self.theme.typography.bodyStrong)
@@ -1101,7 +1095,7 @@ struct SettingsView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
-                                .disabled(self.asr.isRunning) // Disable device changes during recording
+                                .disabled(self.asr.isRunning)
                                 .onChange(of: self.selectedInputUID) { oldUID, newUID in
                                     guard !newUID.isEmpty else { return }
 
@@ -1113,9 +1107,8 @@ struct SettingsView: View {
                                         return
                                     }
 
-                                    SettingsStore.shared.preferredInputDeviceUID = newUID
-                                    // Only change system default if sync is enabled
-                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
+                                    SettingsStore.shared.recordInputDeviceSelection(newUID)
+                                    if SettingsStore.shared.shouldSyncInputSelectionToSystemDefault() {
                                         _ = AudioDevice.setDefaultInputDevice(uid: newUID)
                                     }
                                 }
@@ -1124,17 +1117,22 @@ struct SettingsView: View {
                                     // Update cached default device name when device list changes
                                     self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
 
-                                    // If selection is empty or not found in new list, select first available
-                                    if !newDevices.isEmpty {
-                                        let currentValid = newDevices.contains { $0.uid == self.selectedInputUID }
-                                        if !currentValid {
-                                            if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                                               newDevices.contains(where: { $0.uid == defaultUID })
-                                            {
-                                                self.selectedInputUID = defaultUID
-                                            } else {
-                                                self.selectedInputUID = newDevices.first?.uid ?? ""
-                                            }
+                                    guard !newDevices.isEmpty else { return }
+
+                                    switch self.microphoneSelectionMode {
+                                    case .system:
+                                        if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
+                                           newDevices.contains(where: { $0.uid == defaultUID })
+                                        {
+                                            self.selectedInputUID = defaultUID
+                                        } else if !newDevices.contains(where: { $0.uid == self.selectedInputUID }) {
+                                            self.selectedInputUID = newDevices.first?.uid ?? ""
+                                        }
+                                    case .manual:
+                                        if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
+                                           newDevices.contains(where: { $0.uid == preferredUID })
+                                        {
+                                            self.selectedInputUID = preferredUID
                                         }
                                     }
                                 }
@@ -1172,10 +1170,7 @@ struct SettingsView: View {
                                     }
 
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
-                                    // Only change system default if sync is enabled
-                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
-                                        _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
-                                    }
+                                    _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
                                 }
                                 // Sync selection when devices load or change
                                 .onChange(of: self.outputDevices) { _, newDevices in
@@ -1212,11 +1207,6 @@ struct SettingsView: View {
                                         .lineLimit(1)
                                 }
                             }
-
-                            // REMOVED: Sync mode toggle
-                            // Independent mode doesn't work for aggregate devices (Bluetooth, etc.)
-                            // due to CoreAudio limitation (OSStatus -10851)
-                            // Always use sync mode for reliability across all device types
                         }
                     }
                     .padding(16)
@@ -2288,6 +2278,65 @@ struct SettingsView: View {
             }
         }
         .opacity(enabledValue ? 1 : 0.7)
+    }
+}
+
+private extension SettingsView {
+    var microphoneModeInfo: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(self.settingsSecondaryText)
+                .font(self.theme.typography.bodyStrong)
+            Text(
+                self.microphoneSelectionMode == .system
+                    ? "FluidVoice follows the macOS default microphone."
+                    : "FluidVoice keeps your preferred microphone selected while it is available."
+            )
+            .font(self.theme.typography.bodySmall)
+            .foregroundStyle(self.settingsSecondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    var microphoneModeToggle: some View {
+        Toggle(
+            "Use macOS default microphone",
+            isOn: Binding(
+                get: { self.microphoneSelectionMode == .system },
+                set: { self.updateMicrophoneSelectionMode(useSystemDefault: $0) }
+            )
+        )
+        .toggleStyle(.switch)
+        .font(self.theme.typography.bodyStrong)
+        .foregroundStyle(self.settingsTitleText)
+        .disabled(self.asr.isRunning)
+    }
+
+    func updateMicrophoneSelectionMode(useSystemDefault: Bool) {
+        let nextMode: SettingsStore.MicrophoneSelectionMode = useSystemDefault ? .system : .manual
+        let currentSystemInputUID = AudioDevice.getDefaultInputDevice()?.uid
+        let availableInputUIDs = Set(self.inputDevices.map(\.uid))
+        let restoredSystemInputUID = SettingsStore.shared.setMicrophoneSelectionMode(
+            nextMode,
+            currentSystemInputUID: currentSystemInputUID,
+            availableInputUIDs: availableInputUIDs
+        )
+        self.microphoneSelectionMode = nextMode
+
+        if nextMode == .manual {
+            if self.selectedInputUID.isEmpty,
+               let defaultUID = currentSystemInputUID
+            {
+                self.selectedInputUID = defaultUID
+                SettingsStore.shared.recordInputDeviceSelection(defaultUID)
+            } else {
+                SettingsStore.shared.recordInputDeviceSelection(self.selectedInputUID)
+            }
+        } else if let restoredSystemInputUID {
+            self.selectedInputUID = restoredSystemInputUID
+            _ = AudioDevice.setDefaultInputDevice(uid: restoredSystemInputUID)
+        }
     }
 }
 

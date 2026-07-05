@@ -581,6 +581,17 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             return
         }
 
+        let followSystemItem = NSMenuItem(
+            title: "Use macOS Default Microphone",
+            action: #selector(toggleMicrophoneSelectionMode(_:)),
+            keyEquivalent: ""
+        )
+        followSystemItem.target = self
+        followSystemItem.state = SettingsStore.shared.microphoneSelectionMode == .system ? .on : .off
+        followSystemItem.isEnabled = !self.isRecording
+        submenu.addItem(followSystemItem)
+        submenu.addItem(.separator())
+
         let currentUID = self.currentPreferredInputUID(defaultInputUID: defaultInputUID)
 
         for device in inputDevices {
@@ -603,17 +614,49 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func currentPreferredInputUID(defaultInputUID: String?) -> String? {
-        return defaultInputUID
+        switch SettingsStore.shared.microphoneSelectionMode {
+        case .system:
+            return defaultInputUID
+        case .manual:
+            return SettingsStore.shared.preferredInputDeviceUID ?? defaultInputUID
+        }
     }
 
     @objc private func selectMicrophone(_ sender: NSMenuItem) {
         guard self.isRecording == false else { return }
         guard let uid = sender.representedObject as? String, !uid.isEmpty else { return }
 
-        SettingsStore.shared.preferredInputDeviceUID = uid
-
-        if SettingsStore.shared.syncAudioDevicesWithSystem {
+        SettingsStore.shared.recordInputDeviceSelection(uid)
+        if SettingsStore.shared.shouldSyncInputSelectionToSystemDefault() {
             _ = AudioDevice.setDefaultInputDevice(uid: uid)
+        }
+
+        self.refreshMicrophoneMenu()
+    }
+
+    @objc private func toggleMicrophoneSelectionMode(_ sender: NSMenuItem) {
+        guard self.isRecording == false else { return }
+
+        let nextMode: SettingsStore.MicrophoneSelectionMode =
+            SettingsStore.shared.microphoneSelectionMode == .system ? .manual : .system
+        let currentSystemInputUID = AudioDevice.getDefaultInputDevice()?.uid
+        let availableInputUIDs = Set(AudioDevice.listInputDevices().map(\.uid))
+        let restoredSystemInputUID = SettingsStore.shared.setMicrophoneSelectionMode(
+            nextMode,
+            currentSystemInputUID: currentSystemInputUID,
+            availableInputUIDs: availableInputUIDs
+        )
+
+        let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID ?? ""
+        if nextMode == .manual,
+           preferredInputUID.isEmpty,
+           let defaultUID = currentSystemInputUID
+        {
+            SettingsStore.shared.preferredInputDeviceUID = defaultUID
+        }
+
+        if nextMode == .system, let restoredSystemInputUID {
+            _ = AudioDevice.setDefaultInputDevice(uid: restoredSystemInputUID)
         }
 
         self.refreshMicrophoneMenu()

@@ -227,6 +227,7 @@ struct ContentView: View {
     @State private var outputDevices: [AudioDevice.Device] = []
     @State private var selectedInputUID: String = AudioDevice.getDefaultInputDevice()?.uid ?? ""
     @State private var selectedOutputUID: String = SettingsStore.shared.preferredOutputDeviceUID ?? ""
+    @State private var microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode = SettingsStore.shared.microphoneSelectionMode
 
     // AI Prompts Tab State
     @State private var aiInputText: String = ""
@@ -356,37 +357,19 @@ struct ContentView: View {
                 // Hardware change detected → refresh device lists
                 self.refreshDevices()
 
-                // Only sync UI with system defaults when sync is enabled
-                // When sync is disabled, keep the user's preferred device selection
-                if SettingsStore.shared.syncAudioDevicesWithSystem {
-                    // Sync mode: Update UI to match current system defaults
+                switch SettingsStore.shared.microphoneSelectionMode {
+                case .system:
                     if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
                         self.selectedInputUID = sysIn
                     }
-                    if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
-                        self.selectedOutputUID = sysOut
-                    }
-                } else {
-                    // Independent mode: Only update if preferred device is no longer available
-                    if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
-                       inputDevices.contains(where: { $0.uid == prefIn })
-                    {
+                case .manual:
+                    if let prefIn = SettingsStore.shared.preferredInputDeviceUID {
                         self.selectedInputUID = prefIn
-                    } else if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
-                        // Fallback to system default if preferred device disconnected
-                        self.selectedInputUID = sysIn
-                        SettingsStore.shared.preferredInputDeviceUID = sysIn
                     }
+                }
 
-                    if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
-                       outputDevices.contains(where: { $0.uid == prefOut })
-                    {
-                        self.selectedOutputUID = prefOut
-                    } else if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
-                        // Fallback to system default if preferred device disconnected
-                        self.selectedOutputUID = sysOut
-                        SettingsStore.shared.preferredOutputDeviceUID = sysOut
-                    }
+                if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
+                    self.selectedOutputUID = sysOut
                 }
             }
             .onDisappear {
@@ -595,17 +578,22 @@ struct ContentView: View {
             self.menuBarManager.configure(asrService: self.appServices.asr)
             self.refreshDevices()
 
-            if self.selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid {
-                self.selectedInputUID = defIn
-            }
-            if self.selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid {
-                self.selectedOutputUID = defOut
+            switch SettingsStore.shared.microphoneSelectionMode {
+            case .system:
+                if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid {
+                    self.selectedInputUID = defaultUID
+                }
+            case .manual:
+                if let preferredUID = SettingsStore.shared.preferredInputDeviceUID, !preferredUID.isEmpty {
+                    self.selectedInputUID = preferredUID
+                } else if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid {
+                    self.selectedInputUID = defaultUID
+                    SettingsStore.shared.preferredInputDeviceUID = defaultUID
+                }
             }
 
-            if let systemInputUID = AudioDevice.getDefaultInputDevice()?.uid,
-               self.inputDevices.contains(where: { $0.uid == systemInputUID })
-            {
-                self.selectedInputUID = systemInputUID
+            if self.selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid {
+                self.selectedOutputUID = defOut
             }
 
             if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
@@ -1463,6 +1451,7 @@ struct ContentView: View {
             visualizerNoiseThreshold: self.$visualizerNoiseThreshold,
             selectedInputUID: self.$selectedInputUID,
             selectedOutputUID: self.$selectedOutputUID,
+            microphoneSelectionMode: self.$microphoneSelectionMode,
             inputDevices: self.$inputDevices,
             outputDevices: self.$outputDevices,
             accessibilityEnabled: self.$accessibilityEnabled,
@@ -4276,7 +4265,13 @@ private extension ContentView {
         self.isRewriteModeShortcutEnabled = SettingsStore.shared.rewriteModeShortcutEnabled
         self.playgroundUsed = SettingsStore.shared.playgroundUsed
         self.visualizerNoiseThreshold = SettingsStore.shared.visualizerNoiseThreshold
-        self.selectedInputUID = AudioDevice.getDefaultInputDevice()?.uid ?? ""
+        self.microphoneSelectionMode = SettingsStore.shared.microphoneSelectionMode
+        switch SettingsStore.shared.microphoneSelectionMode {
+        case .system:
+            self.selectedInputUID = AudioDevice.getDefaultInputDevice()?.uid ?? ""
+        case .manual:
+            self.selectedInputUID = SettingsStore.shared.preferredInputDeviceUID ?? AudioDevice.getDefaultInputDevice()?.uid ?? ""
+        }
         self.selectedOutputUID = SettingsStore.shared.preferredOutputDeviceUID ?? ""
         self.enableDebugLogs = SettingsStore.shared.enableDebugLogs
         self.hotkeyMode = SettingsStore.shared.hotkeyMode

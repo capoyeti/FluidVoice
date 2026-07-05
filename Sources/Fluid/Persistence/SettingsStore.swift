@@ -142,6 +142,24 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    enum MicrophoneSelectionMode: String, Codable, CaseIterable, Identifiable {
+        case system
+        case manual
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .system:
+                return "Use macOS Default"
+            case .manual:
+                return "Use Preferred Microphone"
+            }
+        }
+    }
+
     enum DictationPromptSelection: Equatable {
         case off, `default`, privateAI
         case profile(String)
@@ -1663,18 +1681,61 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
-    /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
-    /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
-    var syncAudioDevicesWithSystem: Bool {
+    var microphoneSelectionMode: MicrophoneSelectionMode {
         get {
-            // Always return true - independent mode doesn't work for Bluetooth/aggregate devices
-            return true
+            if let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+               let mode = MicrophoneSelectionMode(rawValue: raw)
+            {
+                return mode
+            }
+
+            return .system
         }
         set {
-            // No-op: sync mode is always enabled
-            // Kept for backward compatibility but value is ignored
-            _ = newValue
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.microphoneSelectionMode)
         }
+    }
+
+    func recordInputDeviceSelection(_ uid: String) {
+        guard uid.isEmpty == false else { return }
+        guard self.microphoneSelectionMode == .manual else { return }
+
+        self.preferredInputDeviceUID = uid
+    }
+
+    func shouldSyncInputSelectionToSystemDefault() -> Bool {
+        self.microphoneSelectionMode == .system
+    }
+
+    @discardableResult
+    func setMicrophoneSelectionMode(
+        _ mode: MicrophoneSelectionMode,
+        currentSystemInputUID: String?,
+        availableInputUIDs: Set<String>
+    ) -> String? {
+        let previousMode = self.microphoneSelectionMode
+
+        if previousMode == .system,
+           mode == .manual,
+           let currentSystemInputUID,
+           currentSystemInputUID.isEmpty == false
+        {
+            self.defaults.set(currentSystemInputUID, forKey: Keys.systemInputDeviceUIDBeforeManual)
+        }
+
+        self.microphoneSelectionMode = mode
+
+        guard mode == .system else { return nil }
+
+        if let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
+           previousSystemInputUID.isEmpty == false,
+           availableInputUIDs.contains(previousSystemInputUID)
+        {
+            return previousSystemInputUID
+        }
+
+        return currentSystemInputUID
     }
 
     var visualizerNoiseThreshold: Double {
@@ -2847,6 +2908,7 @@ final class SettingsStore: ObservableObject {
             textInsertionMode: self.textInsertionMode,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
+            microphoneSelectionMode: self.microphoneSelectionMode,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
@@ -2951,6 +3013,9 @@ final class SettingsStore: ObservableObject {
         self.textInsertionMode = payload.textInsertionMode
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.preferredOutputDeviceUID = payload.preferredOutputDeviceUID
+        if let microphoneSelectionMode = payload.microphoneSelectionMode {
+            self.microphoneSelectionMode = microphoneSelectionMode
+        }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
@@ -4441,7 +4506,8 @@ private extension SettingsStore {
         static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
-        static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
+        static let microphoneSelectionMode = "MicrophoneSelectionMode"
+        static let systemInputDeviceUIDBeforeManual = "SystemInputDeviceUIDBeforeManual"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
