@@ -874,6 +874,38 @@ final class DictationE2ETests: XCTestCase {
         )
     }
 
+    func testWhisperProvider_legacyBinCacheDoesNotCountAsDownloadedOrDeletedByReadinessCheck() throws {
+        let modelDirectory = Self.modelDirectoryForRun()
+        try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+
+        let legacyURL = modelDirectory.appendingPathComponent("ggml-tiny.bin")
+        try Data([0x01, 0x02, 0x03]).write(to: legacyURL)
+
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
+
+        XCTAssertFalse(provider.modelsExistOnDisk())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
+    func testWhisperProvider_ggufCacheReadinessDoesNotDeleteLegacyUntilExplicitClear() async throws {
+        let modelDirectory = Self.modelDirectoryForRun()
+        try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+
+        let model = SettingsStore.SpeechModel.whisperTiny
+        let ggufURL = modelDirectory.appendingPathComponent(model.whisperModelFile!)
+        let legacyURL = modelDirectory.appendingPathComponent(model.legacyWhisperModelFile!)
+        try Self.createSparseFile(at: ggufURL, size: model.expectedDownloadBytes)
+        try Data([0x01, 0x02, 0x03]).write(to: legacyURL)
+
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: model)
+
+        XCTAssertTrue(provider.modelsExistOnDisk())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+        try await provider.clearCache()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ggufURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     func testAppPromptBinding_profileOverridesModeSelection() {
         self.withPromptSettingsRestored {
             let settings = SettingsStore.shared
@@ -1518,6 +1550,13 @@ final class DictationE2ETests: XCTestCase {
             .appendingPathComponent("FluidVoiceTests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         return base.appendingPathComponent("WhisperModels", isDirectory: true)
+    }
+
+    private static func createSparseFile(at url: URL, size: Int64) throws {
+        _ = FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(size))
+        try handle.close()
     }
 
     private static func normalize(_ text: String) -> String {

@@ -3939,7 +3939,7 @@ final class SettingsStore: ObservableObject {
         case whisperBase = "whisper-base"
         case whisperSmall = "whisper-small"
         case whisperMedium = "whisper-medium"
-        case whisperLargeTurbo = "whisper-large-turbo" // temporarily disabled in UI
+        case whisperLargeTurbo = "whisper-large-turbo"
         case whisperLarge = "whisper-large"
 
         var id: String {
@@ -3964,7 +3964,7 @@ final class SettingsStore: ObservableObject {
             case .whisperBase: return "Whisper Base"
             case .whisperSmall: return "Whisper Small"
             case .whisperMedium: return "Whisper Medium"
-            case .whisperLargeTurbo: return "Whisper Large Turbo (Disabled)"
+            case .whisperLargeTurbo: return "Whisper Large Turbo"
             case .whisperLarge: return "Whisper Large"
             }
         }
@@ -3997,12 +3997,12 @@ final class SettingsStore: ObservableObject {
             case .nemotronStreaming320: return "~668.2 MiB"
             case .appleSpeech: return "Built-in"
             case .appleSpeechAnalyzer: return "Built-in"
-            case .whisperTiny: return "~74.1 MiB"
-            case .whisperBase: return "~141.1 MiB"
-            case .whisperSmall: return "~465.0 MiB"
-            case .whisperMedium: return "~1.43 GiB"
-            case .whisperLargeTurbo: return "~1.51 GiB"
-            case .whisperLarge: return "~2.88 GiB"
+            case .whisperTiny: return "~43.9 MiB"
+            case .whisperBase: return "~81.0 MiB"
+            case .whisperSmall: return "~257.3 MiB"
+            case .whisperMedium: return "~793.0 MiB"
+            case .whisperLargeTurbo: return "~845.3 MiB"
+            case .whisperLarge: return "~1.55 GiB"
             }
         }
 
@@ -4015,12 +4015,12 @@ final class SettingsStore: ObservableObject {
             case .cohereTranscribeSixBit: return 1_650_748_785
             case .nemotronOffline: return 556_552_620
             case .nemotronStreaming, .nemotronStreaming320: return 700_685_415
-            case .whisperTiny: return 77_691_713
-            case .whisperBase: return 147_951_465
-            case .whisperSmall: return 487_601_967
-            case .whisperMedium: return 1_533_763_059
-            case .whisperLargeTurbo: return 1_624_555_275
-            case .whisperLarge: return 3_095_033_483
+            case .whisperTiny: return 45_981_088
+            case .whisperBase: return 84_962_880
+            case .whisperSmall: return 269_751_136
+            case .whisperMedium: return 831_538_144
+            case .whisperLargeTurbo: return 886_381_824
+            case .whisperLarge: return 1_668_741_440
             case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
         }
@@ -4039,8 +4039,20 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        /// The ggml filename for Whisper models
+        /// The GGUF filename for transcribe.cpp Whisper models.
         var whisperModelFile: String? {
+            switch self {
+            case .whisperTiny: return "whisper-tiny-Q8_0.gguf"
+            case .whisperBase: return "whisper-base-Q8_0.gguf"
+            case .whisperSmall: return "whisper-small-Q8_0.gguf"
+            case .whisperMedium: return "whisper-medium-Q8_0.gguf"
+            case .whisperLargeTurbo: return "whisper-large-v3-turbo-Q8_0.gguf"
+            case .whisperLarge: return "whisper-large-v3-Q8_0.gguf"
+            default: return nil
+            }
+        }
+
+        var legacyWhisperModelFile: String? {
             switch self {
             case .whisperTiny: return "ggml-tiny.bin"
             case .whisperBase: return "ggml-base.bin"
@@ -4051,6 +4063,15 @@ final class SettingsStore: ObservableObject {
             default: return nil
             }
         }
+
+        static let legacyWhisperModelFiles: Set<String> = [
+            "ggml-tiny.bin",
+            "ggml-base.bin",
+            "ggml-small.bin",
+            "ggml-medium.bin",
+            "ggml-large-v3-turbo.bin",
+            "ggml-large-v3.bin",
+        ]
 
         /// The short model name for whisper.cpp internal usage
         var whisperModelName: String? {
@@ -4086,7 +4107,10 @@ final class SettingsStore: ObservableObject {
         /// Returns models available for the current Mac's architecture and OS
         static var availableModels: [SpeechModel] {
             allCases.filter { model in
-                if model == .whisperLargeTurbo {
+                if model == .whisperLargeTurbo, !CPUArchitecture.isAppleSilicon {
+                    return false
+                }
+                if model == .whisperLarge, !CPUArchitecture.isAppleSilicon {
                     return false
                 }
                 if model == .qwen3Asr, !Self.qwenPreviewEnabled {
@@ -4205,11 +4229,11 @@ final class SettingsStore: ObservableObject {
             case .whisperSmall:
                 return 4.0
             case .whisperMedium:
-                return 6.0
+                return 5.0
             case .whisperLargeTurbo:
-                return 8.0
+                return 6.0
             case .whisperLarge:
-                return 10.0 // Large model needs ~6-8GB working memory + model size
+                return 8.0
             }
         }
 
@@ -4976,6 +5000,10 @@ extension SettingsStore {
                 if model == .nemotronStreaming320 {
                     return .nemotronStreaming
                 }
+                let requiresAppleSiliconWhisper = model == .whisperLargeTurbo || model == .whisperLarge
+                if requiresAppleSiliconWhisper, !CPUArchitecture.isAppleSilicon {
+                    return .whisperBase
+                }
                 // Validate model is available on this architecture
                 if model.requiresAppleSilicon && !CPUArchitecture.isAppleSilicon {
                     return .whisperBase
@@ -5072,7 +5100,7 @@ extension SettingsStore {
             case "ggml-base.bin": newModel = .whisperBase
             case "ggml-small.bin": newModel = .whisperSmall
             case "ggml-medium.bin": newModel = .whisperMedium
-            case "ggml-large-v3.bin": newModel = .whisperLarge
+            case "ggml-large-v3.bin": newModel = CPUArchitecture.isAppleSilicon ? .whisperLarge : .whisperBase
             default: newModel = .whisperBase
             }
         case "fluidAudio":
