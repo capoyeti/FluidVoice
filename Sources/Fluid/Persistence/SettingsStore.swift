@@ -2962,6 +2962,7 @@ final class SettingsStore: ObservableObject {
             continuousDictationSpacingEnabled: self.continuousDictationSpacingEnabled,
             contextAwareCapitalizationEnabled: self.contextAwareCapitalizationEnabled,
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
+            automaticDictionaryLearningEnabled: self.automaticDictionaryLearningEnabled,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
             selectedDictationPromptID: self.selectedDictationPromptID,
@@ -3086,6 +3087,9 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
+            self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
+        }
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
 
@@ -3952,6 +3956,14 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.vocabularyBoostingEnabled)
             NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+        }
+    }
+
+    var automaticDictionaryLearningEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
         }
     }
 
@@ -4827,6 +4839,7 @@ private extension SettingsStore {
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
+        static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
 
         // Transcription Provider (ASR)

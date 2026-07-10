@@ -15,6 +15,9 @@ struct CustomDictionaryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appServices: AppServices
 
+    private let trainingPrefill: DictionaryTrainingPrefill?
+    private let onTrainingPrefillConsumed: () -> Void
+
     private var asr: ASRService { self.appServices.asr }
 
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
@@ -23,6 +26,7 @@ struct CustomDictionaryView: View {
 
     @State private var boostStatusMessage = "Add custom words for better Parakeet recognition."
     @State private var boostHasError = false
+    @State private var automaticDictionaryLearningEnabled = SettingsStore.shared.automaticDictionaryLearningEnabled
     @State private var vocabBoostingEnabled: Bool = SettingsStore.shared.vocabularyBoostingEnabled
     @State private var isCustomWordsPresented = false
     @State private var isBoostWordEditorPresented = false
@@ -58,6 +62,16 @@ struct CustomDictionaryView: View {
     @State private var editingPunctuationRuleID: UUID?
     @State private var punctuationAliasesText = ""
     @State private var punctuationSymbolText = ""
+    @State private var appliedTrainingPrefillID: UUID?
+    @State private var programmaticTrainingReplacementKey: String?
+
+    init(
+        trainingPrefill: DictionaryTrainingPrefill? = nil,
+        onTrainingPrefillConsumed: @escaping () -> Void = {}
+    ) {
+        self.trainingPrefill = trainingPrefill
+        self.onTrainingPrefillConsumed = onTrainingPrefillConsumed
+    }
 
     private var normalizedTrainingReplacement: String {
         self.trainingReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,7 +306,12 @@ struct CustomDictionaryView: View {
         }
         .onAppear {
             self.loadBoostTerms()
+            self.automaticDictionaryLearningEnabled = SettingsStore.shared.automaticDictionaryLearningEnabled
             self.punctuationAutoConvertEnabled = SettingsStore.shared.autoConvertPunctuationEnabled
+            self.applyTrainingPrefillIfNeeded()
+        }
+        .onChange(of: self.trainingPrefill?.id) { _, _ in
+            self.applyTrainingPrefillIfNeeded()
         }
         .onDisappear {
             guard self.isTrainingRecording else { return }
@@ -319,6 +338,8 @@ struct CustomDictionaryView: View {
             Spacer(minLength: self.theme.metrics.spacing.md)
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
+                self.automaticLearningToggle
+
                 Button(action: self.importDictionary) {
                     Label("Import", systemImage: "square.and.arrow.down")
                 }
@@ -330,6 +351,49 @@ struct CustomDictionaryView: View {
                 .fluidButton(.compact, size: .compact)
             }
         }
+    }
+
+    private var automaticLearningToggle: some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Auto-learn words")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(1)
+
+                Text("Show notifications")
+                    .font(self.theme.typography.captionSmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(1)
+            }
+
+            Toggle("Auto-learn words while typing", isOn: self.$automaticDictionaryLearningEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(self.theme.palette.accent)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 40)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(
+                            self.automaticDictionaryLearningEnabled
+                                ? self.theme.palette.accent.opacity(0.42)
+                                : self.theme.palette.cardBorder.opacity(0.3),
+                            lineWidth: 1
+                        )
+                )
+        )
+        .onChange(of: self.automaticDictionaryLearningEnabled) { _, newValue in
+            SettingsStore.shared.automaticDictionaryLearningEnabled = newValue
+            if !newValue {
+                AutomaticDictionaryCorrectionTracker.shared.cancel()
+            }
+        }
+        .help("Notice corrections to recent dictation and show Train by Voice suggestions.")
     }
 
     private func settingsIconTile(systemName: String) -> some View {
@@ -1543,6 +1607,40 @@ struct CustomDictionaryView: View {
         self.composerMode = mode
     }
 
+    private func applyTrainingPrefillIfNeeded() {
+        guard let trainingPrefill,
+              self.appliedTrainingPrefillID != trainingPrefill.id
+        else {
+            return
+        }
+
+        let intendedText = CustomDictionaryTrainingMerge.normalizedReplacement(trainingPrefill.intendedText)
+        let savedVariants = SettingsStore.shared.customDictionaryEntries
+            .filter { $0.replacement.caseInsensitiveCompare(intendedText) == .orderedSame }
+            .flatMap(\.triggers)
+        let variants = CustomDictionaryTrainingMerge.normalizedTriggers(
+            from: savedVariants + trainingPrefill.capturedVariants,
+            intendedReplacement: intendedText
+        )
+
+        self.appliedTrainingPrefillID = trainingPrefill.id
+        self.composerMode = .train
+        self.programmaticTrainingReplacementKey = intendedText.lowercased()
+        self.trainingReplacement = intendedText
+        self.trainingVariants = variants
+        self.trainingSampleCount = 0
+        self.lastTrainingOutput = ""
+        self.lastTrainingOutputIsCovered = false
+        self.consecutiveCoveredCaptures = 0
+        self.trainingStatusMessage = variants.isEmpty ? "" : "Correction loaded."
+        self.trainingHasError = false
+        self.isTrainingActive = !intendedText.isEmpty
+
+        DispatchQueue.main.async {
+            self.onTrainingPrefillConsumed()
+        }
+    }
+
     private func addManualReplacementIfValid() {
         guard self.canAddManualReplacement else { return }
         let entry = SettingsStore.CustomDictionaryEntry(
@@ -1905,6 +2003,12 @@ struct CustomDictionaryView: View {
     private func handleTrainingReplacementChange(oldValue: String, newValue: String) {
         let oldKey = CustomDictionaryTrainingMerge.normalizedReplacement(oldValue).lowercased()
         let newKey = CustomDictionaryTrainingMerge.normalizedReplacement(newValue).lowercased()
+        if let programmaticKey = self.programmaticTrainingReplacementKey {
+            self.programmaticTrainingReplacementKey = nil
+            if newKey == programmaticKey {
+                return
+            }
+        }
         guard oldKey != newKey else { return }
 
         self.trainingVariants = self.existingTrainingVariants(for: newValue)

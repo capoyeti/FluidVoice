@@ -3313,8 +3313,6 @@ final class ASRService: ObservableObject {
         }
     }
 
-    // MARK: - Typing convenience for compatibility
-
     private let typingService = TypingService() // Reuse instance to avoid conflicts
 
     func typeTextToActiveField(_ text: String) {
@@ -3328,7 +3326,8 @@ final class ASRService: ObservableObject {
     func typeOutputPlanToActiveField(
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
-        textReadyAt: TimeInterval? = nil
+        textReadyAt: TimeInterval? = nil,
+        tracksDictionaryCorrections: Bool = false
     ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
@@ -3338,7 +3337,12 @@ final class ASRService: ObservableObject {
             message: "asr_type_request chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")",
             source: "TypingBenchmark"
         )
-        self.typingService.typeOutputPlanInstantly(plan, preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
+        self.typingService.typeOutputPlanInstantly(
+            plan,
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt,
+            tracksDictionaryCorrections: tracksDictionaryCorrections
+        )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
         let textReadyToDispatchMs = textReadyAt.map {
             String(Int(((dispatchedAt - $0) * 1000).rounded()))

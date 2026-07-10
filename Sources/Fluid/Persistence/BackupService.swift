@@ -86,6 +86,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let continuousDictationSpacingEnabled: Bool?
     let contextAwareCapitalizationEnabled: Bool?
     let pauseMediaDuringTranscription: Bool
+    let automaticDictionaryLearningEnabled: Bool?
     let vocabularyBoostingEnabled: Bool
     let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
     let selectedDictationPromptID: String?

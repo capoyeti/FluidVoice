@@ -772,6 +772,122 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertEqual(entries.first?.triggers, ["fluid voice"])
     }
 
+    func testAutomaticDictionaryCorrectionDetectsEditedWordInsideDictation() {
+        let before = "Notes: I met Barad yesterday."
+        let after = "Notes: I met Barath yesterday."
+        let insertedRange = (before as NSString).range(of: "I met Barad yesterday.")
+
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        )
+
+        XCTAssertEqual(candidate?.heardText, "Barad")
+        XCTAssertEqual(candidate?.correctedText, "Barath")
+    }
+
+    func testAutomaticDictionaryCorrectionDetectsInsertionOnlySpellingFix() {
+        let before = "Barat joined the call"
+        let after = "Barath joined the call"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        )
+
+        XCTAssertEqual(candidate?.heardText, "Barat")
+        XCTAssertEqual(candidate?.correctedText, "Barath")
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresTypingAfterDictation() {
+        let before = "FluidVoice works"
+        let after = "FluidVoice works well"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionAllowsContinuedCorrectionAtRangeEnd() {
+        let change = AutomaticDictionaryTextChange(
+            oldRange: NSRange(location: 5, length: 0),
+            newRange: NSRange(location: 5, length: 1)
+        )
+        let insertedRange = NSRange(location: 0, length: 5)
+
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.isChangeInsideInsertedRange(
+            change,
+            insertedRange: insertedRange
+        ))
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.isChangeInsideInsertedRange(
+            change,
+            insertedRange: insertedRange,
+            allowsInsertionAtEnd: true
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionKeepsWaitingWhileCaretTouchesCorrectedWord() {
+        let correctedRange = NSRange(location: 8, length: 6)
+
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
+            NSRange(location: 14, length: 0),
+            candidateRange: correctedRange
+        ))
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
+            NSRange(location: 15, length: 0),
+            candidateRange: correctedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionTreatsSpaceAfterWordAsCompletion() {
+        let change = AutomaticDictionaryTextChange(
+            oldRange: NSRange(location: 6, length: 0),
+            newRange: NSRange(location: 6, length: 1)
+        )
+        let correctedRange = NSRange(location: 0, length: 6)
+
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.changeContinuesCandidate(
+            change,
+            after: "Barath ",
+            candidateRange: correctedRange
+        ))
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.changeContinuesCandidate(
+            change,
+            after: "Baratha",
+            candidateRange: correctedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresEditOutsideDictation() {
+        let before = "Title: I met Barad"
+        let after = "Heading: I met Barad"
+        let insertedRange = (before as NSString).range(of: "I met Barad")
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresCaseOnlyEdit() {
+        let before = "fluidvoice"
+        let after = "FluidVoice"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
     func testDictionaryTransferImport_rejectsInvalidReplacementTriggerType() {
         let json = """
         {

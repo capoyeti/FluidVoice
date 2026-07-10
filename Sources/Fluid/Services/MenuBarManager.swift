@@ -58,6 +58,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        AppNavigationRouter.shared.configureWindowPresenter { [weak self] in
+            self?.openMainWindow()
+        }
         // Don't setup menu bar immediately - defer until app is ready
     }
 
@@ -216,6 +219,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     func showRecordingOverlayImmediately() {
+        AutomaticDictionaryCorrectionTracker.shared.cancel()
+
         guard let asrService else {
             self.overlayBench("instant_show_return reason=no_asr_service")
             return

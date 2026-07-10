@@ -240,6 +240,7 @@ struct ContentView: View {
 
     @State private var selectedSidebarItem: SidebarItem?
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
+    @State private var pendingDictionaryTrainingPrefill: DictionaryTrainingPrefill?
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
@@ -1012,6 +1013,9 @@ struct ContentView: View {
             self.selectedSidebarItem = .aiEnhancements
         case .history:
             self.selectedSidebarItem = .history
+        case let .customDictionaryTraining(prefill):
+            self.pendingDictionaryTrainingPrefill = prefill
+            self.selectedSidebarItem = .customDictionary
         }
     }
 
@@ -1308,7 +1312,12 @@ struct ContentView: View {
         case .meetingTools:
             return AnyView(self.meetingToolsView)
         case .customDictionary:
-            return AnyView(CustomDictionaryView())
+            return AnyView(CustomDictionaryView(
+                trainingPrefill: self.pendingDictionaryTrainingPrefill,
+                onTrainingPrefillConsumed: {
+                    self.pendingDictionaryTrainingPrefill = nil
+                }
+            ))
         case .stats:
             return AnyView(self.statsView)
         case .feedback:
@@ -2485,7 +2494,8 @@ struct ContentView: View {
             self.asr.typeOutputPlanToActiveField(
                 finalOutputPlan,
                 preferredTargetPID: typingTarget.pid,
-                textReadyAt: finalTextReadyAt
+                textReadyAt: finalTextReadyAt,
+                tracksDictionaryCorrections: true
             )
             didTypeExternally = true
             if !shouldShowAIProcessingFailure, !didRequestOverlayHideOnStop {

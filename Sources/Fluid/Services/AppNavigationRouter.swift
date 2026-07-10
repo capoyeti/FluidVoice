@@ -1,19 +1,35 @@
 import Foundation
 
+struct DictionaryTrainingPrefill: Equatable, Identifiable {
+    let id = UUID()
+    let intendedText: String
+    let capturedVariants: [String]
+}
+
 enum AppNavigationDestination {
     case aiEnhancements
     case history
+    case customDictionaryTraining(DictionaryTrainingPrefill)
 }
 
+@MainActor
 final class AppNavigationRouter {
     static let shared = AppNavigationRouter()
 
     private var pendingDestination: AppNavigationDestination?
+    private var presentMainWindow: (() -> Void)?
 
     private init() {}
 
-    func request(_ destination: AppNavigationDestination) {
+    func configureWindowPresenter(_ presenter: @escaping () -> Void) {
+        self.presentMainWindow = presenter
+    }
+
+    func request(_ destination: AppNavigationDestination, presentsMainWindow: Bool = false) {
         self.pendingDestination = destination
+        if presentsMainWindow {
+            self.presentMainWindow?()
+        }
         NotificationCenter.default.post(name: .appNavigationRequested, object: nil)
     }
 
