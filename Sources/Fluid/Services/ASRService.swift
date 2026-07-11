@@ -2321,7 +2321,11 @@ final class ASRService: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             guard let changedEngine = notification.object as? AVAudioEngine else { return }
-            Task { @MainActor [weak self, weak changedEngine] in
+            // Do not weak-capture the notification engine. AVAudioEngine can emit
+            // configuration changes while the old engine is being torn down, and
+            // forming a weak reference during that window can trigger an objc
+            // runtime abort before our handler runs.
+            Task { @MainActor [weak self, changedEngine] in
                 self?.handleEngineConfigurationChanged(changedEngine)
             }
         }

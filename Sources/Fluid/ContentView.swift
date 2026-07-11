@@ -479,7 +479,10 @@ struct ContentView: View {
 
     private func handlePasteLastTranscriptionShortcutEnabledChange(_ isEnabled: Bool) {
         SettingsStore.shared.pasteLastTranscriptionShortcutEnabled = isEnabled
-        if !isEnabled, self.activeShortcutRecordingTarget == .pasteLast {
+        if isEnabled, self.pasteLastTranscriptionHotkeyShortcut == nil {
+            self.shortcutRecordingMessage = nil
+            self.activeShortcutRecordingTarget = .pasteLast
+        } else if !isEnabled, self.activeShortcutRecordingTarget == .pasteLast {
             self.clearShortcutRecordingMode()
         }
     }

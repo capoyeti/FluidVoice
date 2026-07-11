@@ -263,6 +263,7 @@ final class GlobalHotkeyManager: NSObject {
 
     private var isInitialized = false
     private var initializationTask: Task<Void, Never>?
+    private var initializationGeneration = UUID()
     private var healthCheckTask: Task<Void, Never>?
     private var maxRetryAttempts = 5
     private var retryDelay: TimeInterval = 0.5
@@ -320,11 +321,19 @@ final class GlobalHotkeyManager: NSObject {
     private func initializeWithDelay() {
         DebugLogger.shared.debug("Starting delayed initialization...", source: "GlobalHotkeyManager")
 
+        let generation = UUID()
+        self.initializationGeneration = generation
         self.initializationTask = Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
 
             await MainActor.run {
-                self.setupGlobalHotkeyWithRetry()
+                guard self.initializationGeneration == generation else { return }
+                self.setupGlobalHotkeyWithRetry(generation: generation)
             }
         }
     }
@@ -411,27 +420,37 @@ final class GlobalHotkeyManager: NSObject {
         self.pasteLastTranscriptionCallback = callback
     }
 
-    private func setupGlobalHotkeyWithRetry() {
-        for attempt in 1...self.maxRetryAttempts {
-            DebugLogger.shared.debug("Setup attempt \(attempt)/\(self.maxRetryAttempts)", source: "GlobalHotkeyManager")
+    private func setupGlobalHotkeyWithRetry(generation: UUID? = nil, attempt: Int = 1) {
+        if let generation, generation != self.initializationGeneration {
+            DebugLogger.shared.debug("Skipping stale hotkey setup attempt", source: "GlobalHotkeyManager")
+            return
+        }
 
-            if self.setupGlobalHotkey() {
-                self.isInitialized = true
-                DebugLogger.shared.info("Successfully initialized on attempt \(attempt)", source: "GlobalHotkeyManager")
-                self.startHealthCheckTimer()
-                return
-            }
+        DebugLogger.shared.debug("Setup attempt \(attempt)/\(self.maxRetryAttempts)", source: "GlobalHotkeyManager")
 
-            if attempt < self.maxRetryAttempts {
-                DebugLogger.shared.warning("Attempt \(attempt) failed, retrying in \(self.retryDelay) seconds...", source: "GlobalHotkeyManager")
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64((self?.retryDelay ?? 0.5) * 1_000_000_000))
-                    await MainActor.run { [weak self] in
-                        self?.setupGlobalHotkeyWithRetry()
-                    }
+        if self.setupGlobalHotkey() {
+            self.isInitialized = true
+            DebugLogger.shared.info("Successfully initialized on attempt \(attempt)", source: "GlobalHotkeyManager")
+            self.startHealthCheckTimer()
+            return
+        }
+
+        if attempt < self.maxRetryAttempts {
+            DebugLogger.shared.warning("Attempt \(attempt) failed, retrying in \(self.retryDelay) seconds...", source: "GlobalHotkeyManager")
+            Task { [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: UInt64((self?.retryDelay ?? 0.5) * 1_000_000_000))
+                } catch {
+                    return
                 }
-                return
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    if let generation, generation != self.initializationGeneration { return }
+                    self.setupGlobalHotkeyWithRetry(generation: generation, attempt: attempt + 1)
+                }
             }
+            return
         }
 
         DebugLogger.shared.error("Failed to initialize after \(self.maxRetryAttempts) attempts", source: "GlobalHotkeyManager")
@@ -1005,7 +1024,7 @@ final class GlobalHotkeyManager: NSObject {
 
         if !self.isEventTapEnabled() {
             DebugLogger.shared.warning("Event tap re-enable failed — recreating tap", source: "GlobalHotkeyManager")
-            self.setupGlobalHotkeyWithRetry()
+            self.setupGlobalHotkeyWithRetry(generation: self.initializationGeneration)
         }
 
         return Unmanaged.passUnretained(event)
@@ -1861,6 +1880,7 @@ final class GlobalHotkeyManager: NSObject {
 
         self.initializationTask?.cancel()
         self.healthCheckTask?.cancel()
+        self.initializationGeneration = UUID()
         self.resetModifierOnlyShortcutTracking(reason: .reinitialize)
         self.isInitialized = false
         self.initializeWithDelay()

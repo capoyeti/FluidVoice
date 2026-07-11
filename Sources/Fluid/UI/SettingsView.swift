@@ -773,7 +773,6 @@ struct SettingsView: View {
                                         isAnyRecordingActive: self.isRecordingAnyShortcut,
                                         recordingMessage: self.isRecording(.pasteLast) ? self.shortcutRecordingMessage : nil,
                                         isEnabled: self.$pasteLastTranscriptionShortcutEnabled,
-                                        requiresShortcutToEnable: true,
                                         onChangePressed: {
                                             DebugLogger.shared.debug("Starting to record new paste last transcription shortcut", source: "SettingsView")
                                             self.shortcutRecordingMessage = nil
