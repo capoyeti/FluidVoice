@@ -2061,7 +2061,30 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Using LLMClient for transcription (streaming=\(enableStreaming))", source: "ContentView")
 
-        let response = try await LLMClient.shared.call(config)
+        let response: LLMClient.Response
+        if enableStreaming {
+            do {
+                response = try await LLMClient.shared.call(config)
+            } catch {
+                DebugLogger.shared.warning(
+                    "Streaming dictation post-processing failed; retrying without streaming: \(error.localizedDescription)",
+                    source: "ContentView"
+                )
+                let fallbackConfig = LLMClient.Config(
+                    messages: messages,
+                    model: derivedSelectedModel,
+                    baseURL: derivedBaseURL,
+                    apiKey: apiKey,
+                    streaming: false,
+                    tools: [],
+                    temperature: isTemperatureUnsupported ? nil : 0.2,
+                    extraParameters: extraParams
+                )
+                response = try await LLMClient.shared.call(fallbackConfig)
+            }
+        } else {
+            response = try await LLMClient.shared.call(config)
+        }
 
         // Log thinking if present (for debugging)
         if let thinking = response.thinking {
