@@ -811,10 +811,13 @@ final class ASRService: ObservableObject {
             self.directAudioInput = nil
         }
 
-        self.benchmarkLog(
-            "audio_backend kind=av_audio_engine_fallback reason=" +
-                (directCaptureEnabled ? "direct_unavailable" : "experimental_disabled")
+        try self.startCompatibilityAudioCapture(
+            reason: directCaptureEnabled ? "direct_unavailable" : "experimental_disabled"
         )
+    }
+
+    private func startCompatibilityAudioCapture(reason: String) throws {
+        self.benchmarkLog("audio_backend kind=av_audio_engine_fallback reason=\(reason)")
         try self.configureSession()
         try self.startEngine()
         try self.setupEngineTap()
@@ -903,7 +906,7 @@ final class ASRService: ObservableObject {
                 sessionID: sessionID,
                 startHostTime: mach_absolute_time()
             )
-            try self.startPreferredAudioCapture()
+            try self.startCompatibilityAudioCapture(reason: "duration_mismatch")
             let model = SettingsStore.shared.selectedSpeechModel
             if model.supportsStreaming, self.isDictionaryTrainingCaptureActive == false {
                 self.startStreamingTranscription()
