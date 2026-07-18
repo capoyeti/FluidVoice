@@ -532,10 +532,8 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerCard(_ item: ProviderItem) -> some View {
-        let isAppleDisabled = item.id == "apple-intelligence-disabled"
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
-        let isComingSoon = isAppleDisabled
-        let isExpanded = self.expandedProviderID == item.id && !isAppleDisabled
+        let isExpanded = self.expandedProviderID == item.id
         let status = self.providerStatus(for: item)
         let borderColor = isExpanded
             ? self.theme.palette.accent.opacity(0.5)
@@ -551,7 +549,7 @@ extension AIEnhancementSettingsView {
         .foregroundStyle(status.color)
 
         return VStack(alignment: .leading, spacing: 0) {
-            Button(action: { if !isComingSoon { self.toggleProviderExpansion(item.id) } }) {
+            Button(action: { self.toggleProviderExpansion(item.id) }) {
                 HStack(alignment: .center, spacing: 10) {
                     self.providerLogoView(for: item)
                         .frame(width: 34, height: 34)
@@ -559,24 +557,21 @@ extension AIEnhancementSettingsView {
                     HStack(spacing: 8) {
                         Text(item.name)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(isComingSoon ? self.theme.palette.accent : self.theme.palette.primaryText)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         statusView
                     }
 
                     Spacer()
 
-                    if !isComingSoon {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                    }
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.7))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isComingSoon)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
@@ -618,12 +613,6 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerStatus(for item: ProviderItem) -> (text: String, color: Color, icon: String) {
-        if item.id == "apple-intelligence-disabled" {
-            return ("Unavailable", .secondary, "lock.slash")
-        }
-        if item.id == "apple-intelligence" {
-            return ("On-device", .secondary, "lock.shield")
-        }
         switch self.viewModel.connectionStatus(for: item.id) {
         case .success:
             return ("Connection verified", Color.fluidGreen, "checkmark.circle.fill")
@@ -634,10 +623,6 @@ extension AIEnhancementSettingsView {
         case .unknown:
             return ("Connection not tested", .orange, "exclamationmark.circle.fill")
         }
-    }
-
-    private var isComingSoonProvider: (ProviderItem) -> Bool {
-        { $0.id == "apple-intelligence-disabled" }
     }
 
     private func toggleProviderExpansion(_ providerID: String) {
@@ -685,6 +670,8 @@ extension AIEnhancementSettingsView {
                 }
             }
 
+            self.privateAIBackendRow(isBusy: isBusy)
+
             if isDownloading || isLoading || isLoaded || hasLoadFailure || isVerified || !isInstalled {
                 self.privateAIModelStatusRow(
                     status: status,
@@ -695,7 +682,9 @@ extension AIEnhancementSettingsView {
             }
 
             self.privateAIPrefixCacheRow(isBusy: isBusy)
-            self.privateAIBoostRow(isBusy: isBusy)
+            if self.privateAIShowsBoostRow {
+                self.privateAIBoostRow(isBusy: isBusy)
+            }
 
             if self.viewModel.connectionStatus(for: PrivateAIProviderFeature.shared.providerID) == .failed,
                !self.viewModel.connectionErrorMessage.isEmpty
@@ -724,8 +713,12 @@ extension AIEnhancementSettingsView {
                                     .controlSize(.mini)
                                     .fixedSize()
                             }
-                            Text(isDownloading ? Self.downloadButtonText(progress: downloadProgress) : "Download & Verify")
-                                .font(.system(size: 11, weight: .semibold))
+                            Text(
+                                isDownloading
+                                    ? Self.downloadButtonText(progress: downloadProgress)
+                                    : "Download \(self.privateAIBackendShortName) & Verify"
+                            )
+                            .font(.system(size: 11, weight: .semibold))
                         }
                     }
                     .fluidButton(.accent, size: .small)
@@ -772,6 +765,51 @@ extension AIEnhancementSettingsView {
                 .accessibilityLabel("Faster first result")
 
             Spacer(minLength: 0)
+        }
+    }
+
+    private func privateAIBackendRow(isBusy: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("Backend")
+                .font(.caption)
+                .frame(width: 124, alignment: .leading)
+
+            self.privateAIBackendPicker(isBusy: isBusy)
+                .frame(width: 190)
+
+            Text(self.settings.privateAIBackendPreference.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func privateAIBackendPicker(isBusy: Bool) -> some View {
+        Picker("", selection: self.privateAIBackendBinding) {
+            ForEach(self.privateAISelectableBackendPreferences) { preference in
+                Text(preference.displayName).tag(preference)
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .disabled(isBusy)
+        .help("Local Fluid-1 runtime. Default is MLX on Apple Silicon.")
+    }
+
+    private var privateAISelectableBackendPreferences: [SettingsStore.PrivateAIBackendPreference] {
+        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+    }
+
+    private var privateAIBackendShortName: String {
+        switch self.settings.privateAIBackendPreference {
+        case .auto:
+            return SettingsStore.PrivateAIBackendPreference.systemDefault == .mlx ? "MLX" : "llama.cpp"
+        case .llama:
+            return "llama.cpp"
+        case .mlx:
+            return "MLX"
         }
     }
 
@@ -881,6 +919,26 @@ extension AIEnhancementSettingsView {
         )
     }
 
+    private var privateAIBackendBinding: Binding<SettingsStore.PrivateAIBackendPreference> {
+        Binding(
+            get: { self.settings.privateAIBackendPreference },
+            set: { preference in
+                self.setPrivateAIBackendPreference(preference)
+            }
+        )
+    }
+
+    private var privateAIShowsBoostRow: Bool {
+        switch self.settings.privateAIBackendPreference {
+        case .llama:
+            return true
+        case .auto:
+            return CPUArchitecture.isIntel
+        case .mlx:
+            return false
+        }
+    }
+
     private var privateAIContextTokenLimitBinding: Binding<Int> {
         Binding(
             get: { self.settings.privateAIContextTokenLimit },
@@ -961,21 +1019,39 @@ extension AIEnhancementSettingsView {
                 guard self.privateAISelectedModelID == model.id else { return }
                 if verified {
                     self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
+                    if PrivateAIMLXUpgradeCoordinator.isUpgradePending() {
+                        PrivateAIMLXUpgradeCoordinator.completeUpgrade()
+                        await PrivateAIIntegrationService.shared.removeInactiveInstalledModels(keeping: model)
+                    }
                 } else {
                     let message = self.viewModel.connectionErrorMessage.isEmpty
                         ? "Model downloaded, but verification failed."
                         : self.viewModel.connectionErrorMessage
-                    self.privateAILoadState = .failed(modelID: model.id, message: message)
+                    self.restoreLlamaAfterFailedMLXUpgrade(message: message, modelID: model.id)
                 }
             } catch {
                 guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
+                self.restoreLlamaAfterFailedMLXUpgrade(
+                    message: Self.errorMessage(for: error),
+                    modelID: model.id
                 )
             }
             self.viewModel.refreshProviderItems()
         }
+    }
+
+    private func restoreLlamaAfterFailedMLXUpgrade(message: String, modelID: String) {
+        guard PrivateAIMLXUpgradeCoordinator.isUpgradePending() else {
+            self.privateAILoadState = .failed(modelID: modelID, message: message)
+            return
+        }
+
+        PrivateAIMLXUpgradeCoordinator.restorePreviousLlama()
+        self.viewModel.onAppear()
+        self.privateAILoadState = .failed(
+            modelID: modelID,
+            message: "MLX upgrade failed. Your previous llama.cpp model is still active. \(message)"
+        )
     }
 
     private func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel) {
@@ -1060,8 +1136,11 @@ extension AIEnhancementSettingsView {
         }
 
         if model.canDownload {
+            let size = model.artifact.byteCount.map {
+                " (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)))"
+            } ?? ""
             return PrivateAIProviderModelStatus(
-                detail: "Model not downloaded.",
+                detail: "\(self.privateAIBackendShortName) model not downloaded\(size).",
                 color: self.theme.palette.accent
             )
         }
@@ -1213,32 +1292,32 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private func providerDetailsSection(for item: ProviderItem) -> AnyView {
-        let isAppleDisabled = item.id == "apple-intelligence-disabled"
-        let isApple = item.id == "apple-intelligence"
-        let providerKey = self.viewModel.providerKey(for: item.id)
-        if isAppleDisabled {
-            return AnyView(
-                HStack(spacing: 10) {
-                    Image(systemName: "lock.slash")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                    Text("Apple Intelligence is unavailable on this device. Enable it in System Settings → Apple Intelligence & Siri.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(self.theme.palette.contentBackground.opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
-                        )
-                )
+    private func setPrivateAIBackendPreference(_ preference: SettingsStore.PrivateAIBackendPreference) {
+        guard self.settings.privateAIBackendPreference != preference else { return }
+        let modelID = self.privateAISelectedModelID
+
+        self.settings.privateAIBackendPreference = preference
+        UserDefaults.standard.removeObject(forKey: PrivateAIIntegrationService.localModelPathDefaultsKey)
+        self.privateAILoadState = .idle
+        self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
+
+        Task { @MainActor in
+            await PrivateAIIntegrationService.shared.unloadCachedRuntime(
+                reason: "Fluid Intelligence backend changed to \(preference.displayName)"
             )
+            guard self.privateAISelectedModelID == modelID else { return }
+            let model = self.selectedPrivateAIModel
+            if PrivateAIIntegrationService.isModelInstalled(model) {
+                self.verifyPrivateAIConnection(model)
+            } else {
+                self.privateAILoadState = .idle
+                self.viewModel.refreshProviderItems()
+            }
         }
+    }
+
+    private func providerDetailsSection(for item: ProviderItem) -> AnyView {
+        let providerKey = self.viewModel.providerKey(for: item.id)
         let isCustom = !ModelRepository.shared.isBuiltIn(item.id)
         let baseURL = self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
@@ -1250,7 +1329,6 @@ extension AIEnhancementSettingsView {
         let hasName = isCustom ? !(self.viewModel.savedProviders.first { $0.id == item.id }?.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : true
         let canFetchModels = hasName && (isLocal ? !baseURL.isEmpty : (hasAPIKey && !baseURL.isEmpty))
         let canVerify = hasModels && !self.viewModel.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && canFetchModels
-        let isVerified = self.viewModel.connectionStatus(for: item.id) == .success
         let apiKeyBinding = Binding(
             get: { self.viewModel.providerAPIKey(for: item.id) },
             set: { self.viewModel.updateProviderAPIKey($0, for: item.id, persistEmptyValue: true) }
@@ -1269,43 +1347,7 @@ extension AIEnhancementSettingsView {
         )
 
         return AnyView(VStack(alignment: .leading, spacing: 10) {
-            if isApple {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.fluidGreen)
-                        Text("Apple Intelligence runs on-device and does not require an API key.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.orange)
-                        Text("Output quality can be poor and inconsistent. Use it at your discretion.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.fluidGreen.opacity(0.08))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.fluidGreen.opacity(0.2), lineWidth: 1)
-                        )
-                )
-                if !isVerified {
-                    Button("Verify") {
-                        self.viewModel.verifyAppleIntelligence()
-                    }
-                    .fluidButton(.glass, size: .compact)
-                }
-            } else {
+            Group {
                 if isCustom {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
@@ -1831,9 +1873,6 @@ extension AIEnhancementSettingsView {
         if id.contains("lmstudio") || name.contains("lm studio") || name.contains("lmstudio") {
             return Color(red: 0.15, green: 0.55, blue: 0.35) // Green
         }
-        if id.contains("apple") || name.contains("apple intelligence") {
-            return Color(red: 0.6, green: 0.4, blue: 0.7) // Purple for Apple Intelligence
-        }
         // Default fallback
         return Color(red: 0.9, green: 0.9, blue: 0.92)
     }
@@ -1878,9 +1917,6 @@ extension AIEnhancementSettingsView {
         if id.contains("lmstudio") || name.contains("lm studio") || name.contains("lmstudio") {
             return "Provider_LMStudio"
         }
-        if id.contains("apple") || name.contains("apple intelligence") {
-            return "Provider_AppleIntelligence"
-        }
         if id.contains("compatible") || name.contains("compatible") {
             return "Provider_Compatible"
         }
@@ -1888,7 +1924,7 @@ extension AIEnhancementSettingsView {
         return nil
     }
 
-    private func selectProvider(_ providerID: String) {
+    func selectProvider(_ providerID: String) {
         self.viewModel.selectProvider(providerID)
     }
 
@@ -1963,10 +1999,7 @@ extension AIEnhancementSettingsView {
     }
 
     var builtInProvidersList: [(id: String, name: String)] {
-        ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: self.viewModel.appleIntelligenceAvailable
-        )
+        ModelRepository.shared.builtInProvidersList()
     }
 
     func privateAIEditProviderSection(
@@ -2003,6 +2036,20 @@ extension AIEnhancementSettingsView {
                 }
 
                 HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Backend", systemImage: "cpu")
+
+                    self.privateAIBackendPicker(isBusy: isBusy)
+                        .frame(width: 210)
+
+                    Text(self.settings.privateAIBackendPreference.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
                     self.privateAISettingLabel("Dictation window", systemImage: "memorychip")
 
                     self.privateAIContextControl(isBusy: isBusy)
@@ -2021,7 +2068,9 @@ extension AIEnhancementSettingsView {
                 }
 
                 self.privateAIPrefixCacheRow(isBusy: isBusy)
-                self.privateAIBoostRow(isBusy: isBusy)
+                if self.privateAIShowsBoostRow {
+                    self.privateAIBoostRow(isBusy: isBusy)
+                }
             }
 
             HStack(spacing: 8) {

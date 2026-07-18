@@ -45,6 +45,32 @@ enum AIProcessingError: LocalizedError {
     }
 }
 
+@MainActor
+private final class DictationAIStreamPreviewBuffer {
+    private var chunks: [String] = []
+    private var lastUIUpdate = CFAbsoluteTimeGetCurrent()
+    private let minimumUpdateInterval: CFTimeInterval = 0.033
+
+    func append(_ chunk: String) {
+        guard !chunk.isEmpty else { return }
+        self.chunks.append(chunk)
+
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - self.lastUIUpdate >= self.minimumUpdateInterval else { return }
+        self.lastUIUpdate = now
+        self.publish()
+    }
+
+    func flush() {
+        self.publish()
+    }
+
+    private func publish() {
+        let processedText = self.chunks.joined()
+        NotchOverlayManager.shared.updateTranscriptionText(processedText)
+    }
+}
+
 // MARK: - Sidebar Item Enum
 
 enum SidebarItem: Hashable {
@@ -879,35 +905,17 @@ struct ContentView: View {
 
     // MARK: - Analytics helpers
 
-    private func currentDictationAIModelInfo() -> (provider: String?, model: String?) {
-        let providerID = SettingsStore.shared.selectedProviderID
-
-        if providerID == "apple-intelligence" {
-            return (provider: "apple-intelligence", model: "apple-intelligence")
-        }
-
-        let storedSelectedModelByProvider = SettingsStore.shared.selectedModelByProvider
-        let storedSavedProviders = SettingsStore.shared.savedProviders
-
-        let derivedProvider: String
-        let derivedModel: String
-
-        if let saved = storedSavedProviders.first(where: { $0.id == providerID }) {
-            derivedProvider = "custom:\(saved.id)"
-            derivedModel = storedSelectedModelByProvider[derivedProvider] ?? saved.models.first ?? ""
-        } else if providerID == "openai" {
-            derivedProvider = "openai"
-            derivedModel = storedSelectedModelByProvider["openai"] ?? "gpt-4.1"
-        } else if providerID == "groq" {
-            derivedProvider = "groq"
-            derivedModel = storedSelectedModelByProvider["groq"] ?? "llama-3.3-70b-versatile"
-        } else {
-            derivedProvider = providerID
-            derivedModel = storedSelectedModelByProvider[providerID] ?? ""
-        }
-
-        let providerOut = derivedProvider.isEmpty ? nil : derivedProvider
-        let modelOut = derivedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : derivedModel
+    private func currentDictationAIModelInfo(
+        dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
+        appBundleID: String? = nil
+    ) -> (provider: String?, model: String?) {
+        let route = DictationProviderRoute.resolve(
+            settings: SettingsStore.shared,
+            dictationSlot: dictationSlot,
+            appBundleID: appBundleID
+        )
+        let providerOut = route.providerKey.isEmpty ? nil : route.providerKey
+        let modelOut = route.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : route.model
         return (provider: providerOut, model: modelOut)
     }
 
@@ -1777,54 +1785,31 @@ struct ContentView: View {
     private func processTextWithAI(
         _ inputText: String,
         overrideSystemPrompt: String? = nil,
-        dictationSlot: SettingsStore.DictationShortcutSlot? = nil
+        dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
+        streamHandler: PrivateAIStreamHandler? = nil
     ) async throws -> String {
-        // CRITICAL FIX: Read current settings from SettingsStore, not stale @State copies
-        // This ensures AI provider/model changes in AISettingsView take effect immediately
-        let currentSelectedProviderID = SettingsStore.shared.selectedProviderID
-        let storedProviderAPIKeys = SettingsStore.shared.providerAPIKeys
-        let storedSelectedModelByProvider = SettingsStore.shared.selectedModelByProvider
-        let storedSavedProviders = SettingsStore.shared.savedProviders
-
-        // Derive currentProvider and openAIBaseURL from the current settings
-        let derivedCurrentProvider: String
-        let derivedBaseURL: String
-        let derivedSelectedModel: String
-
-        // Get provider info
-        if let saved = storedSavedProviders.first(where: { $0.id == currentSelectedProviderID }) {
-            // Saved/custom provider
-            derivedCurrentProvider = "custom:\(saved.id)"
-            derivedBaseURL = saved.baseURL
-            derivedSelectedModel = storedSelectedModelByProvider[derivedCurrentProvider] ?? saved.models.first ?? ""
-        } else if ModelRepository.shared.isBuiltIn(currentSelectedProviderID) {
-            // Built-in provider (openai, groq, cerebras, google, openrouter, ollama, lmstudio)
-            derivedCurrentProvider = currentSelectedProviderID
-            derivedBaseURL = ModelRepository.shared.defaultBaseURL(for: currentSelectedProviderID)
-            derivedSelectedModel = storedSelectedModelByProvider[currentSelectedProviderID] ?? ModelRepository.shared.defaultModels(for: currentSelectedProviderID).first ?? ""
-        } else {
-            // Unknown provider - fail closed instead of silently sending to OpenAI.
-            derivedCurrentProvider = currentSelectedProviderID
-            derivedBaseURL = ""
-            derivedSelectedModel = storedSelectedModelByProvider[currentSelectedProviderID] ?? ""
-        }
+        let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
+        let route = DictationProviderRoute.resolve(
+            settings: SettingsStore.shared,
+            dictationSlot: dictationSlot,
+            appBundleID: appInfo.bundleId
+        )
+        let currentSelectedProviderID = route.providerID
+        let derivedCurrentProvider = route.providerKey
+        let derivedBaseURL = route.baseURL
+        let derivedSelectedModel = route.model
 
         guard !derivedCurrentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIProcessingError.noVerifiedProvider
         }
-        if currentSelectedProviderID != "apple-intelligence",
-           derivedSelectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
+        if derivedSelectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw AIProcessingError.missingModel(provider: derivedCurrentProvider)
         }
 
         DebugLogger.shared.debug("processTextWithAI using provider=\(derivedCurrentProvider), model=\(derivedSelectedModel)", source: "ContentView")
 
-        let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
         let isDictationCall = overrideSystemPrompt != nil || dictationSlot != nil
-        let isPrivateAIProvider = currentSelectedProviderID == PrivateAIProviderFeature.shared.providerID ||
-            derivedCurrentProvider == PrivateAIProviderFeature.shared.providerID ||
-            derivedCurrentProvider == "custom:\(PrivateAIProviderFeature.shared.providerID)"
+        let isPrivateAIProvider = route.usesPrivateAI
         let usePrivateAIProvider = overrideSystemPrompt == nil &&
             isDictationCall &&
             (isPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: derivedSelectedModel))
@@ -1836,7 +1821,6 @@ struct ContentView: View {
                 self.logDictationPromptTrace("Selected context text", value: "<none (dictation mode)>")
             }
 
-            let apiKey = storedProviderAPIKeys[derivedCurrentProvider] ?? storedProviderAPIKeys[currentSelectedProviderID] ?? ""
             let response = try await PrivateAIIntegrationService.shared.enhanceDictation(
                 inputText,
                 runtime: PrivateAIIntegrationService.RuntimeConfiguration(
@@ -1844,7 +1828,7 @@ struct ContentView: View {
                     providerKey: derivedCurrentProvider,
                     baseURL: derivedBaseURL,
                     model: derivedSelectedModel,
-                    apiKey: apiKey,
+                    apiKey: route.apiKey,
                     localModelPath: PrivateAIIntegrationService.configuredLocalModelPath,
                     usesStablePromptPrefixKVCache: SettingsStore.shared.privateAIPrefixKVCacheEnabled,
                     usesFluid1Boost: SettingsStore.shared.privateAIBoostEnabled,
@@ -1855,7 +1839,8 @@ struct ContentView: View {
                     bundleID: appInfo.bundleId,
                     windowTitle: appInfo.windowTitle,
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-                )
+                ),
+                streamHandler: streamHandler
             )
 
             if self.shouldTracePromptProcessing {
@@ -1890,53 +1875,9 @@ struct ContentView: View {
             userMessageContent = inputText
         }
 
-        // Route to Apple Intelligence if selected
-        if currentSelectedProviderID == "apple-intelligence" {
-            #if canImport(FoundationModels)
-            if #available(macOS 26.0, *) {
-                let provider = AppleIntelligenceProvider()
-                if self.shouldTracePromptProcessing {
-                    let activeSlot = dictationSlot ?? self.currentDictationShortcutSlot(for: self.activeRecordingMode) ?? .primary
-                    let selectedProfile = SettingsStore.shared.resolvedDictationPromptProfile(
-                        for: activeSlot,
-                        appBundleID: appInfo.bundleId
-                    )
-                    let selectedPromptName: String = {
-                        if SettingsStore.shared.dictationPromptSelection(for: activeSlot) == .off {
-                            return "Off"
-                        }
-                        if let profile = selectedProfile {
-                            return profile.name.isEmpty ? "Untitled Prompt" : profile.name
-                        }
-                        return "Default"
-                    }()
-                    self.logDictationPromptTrace("Selected prompt profile", value: selectedPromptName)
-                    self.logDictationPromptTrace(
-                        "Prompt body (custom/default body)",
-                        value: SettingsStore.shared.effectiveDictationPromptBody(for: activeSlot, appBundleID: appInfo.bundleId)
-                    )
-                    self.logDictationPromptTrace("Built-in default system prompt (baseline)", value: SettingsStore.defaultSystemPromptText(for: .dictate))
-                    self.logDictationPromptTrace("Final system prompt sent to model", value: systemPrompt)
-                    self.logDictationPromptTrace("Input transcription (Q)", value: inputText)
-                    if userMessageContent != inputText {
-                        self.logDictationPromptTrace("Final user message sent to model", value: userMessageContent)
-                    }
-                    self.logDictationPromptTrace("Selected context text", value: "<none (dictation mode)>")
-                }
-                DebugLogger.shared.debug("Using Apple Intelligence for transcription enhancement", source: "ContentView")
-                let output = try await provider.process(systemPrompt: systemPrompt, userText: userMessageContent)
-                if self.shouldTracePromptProcessing {
-                    self.logDictationPromptTrace("Model answer (A)", value: output)
-                }
-                return output
-            }
-            #endif
-            return inputText // Fallback if not available
-        }
-
         // Skip API key validation for local endpoints
         let isLocal = self.isLocalEndpoint(derivedBaseURL)
-        let apiKey = storedProviderAPIKeys[derivedCurrentProvider] ?? ""
+        let apiKey = route.apiKey
 
         if !isLocal {
             guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
@@ -2012,15 +1953,10 @@ struct ContentView: View {
         }
         messages.append(["role": "user", "content": userMessageContent])
 
-        // NOTE: Transcription doesn't need streaming - the full result appears at once
-        // Streaming is only useful for Command/Rewrite modes where real-time display helps
-        // Using non-streaming is simpler and more reliable for transcription enhancement
-        let enableStreaming = false // Hardcoded off for transcription
+        let enableStreaming = streamHandler != nil
 
         // Build LLMClient configuration
-        // Note: No onContentChunk callback needed since we don't display real-time
-        // Thinking tokens are extracted but not displayed (no onThinkingChunk)
-        let config = LLMClient.Config(
+        var config = LLMClient.Config(
             messages: messages,
             model: derivedSelectedModel,
             baseURL: derivedBaseURL,
@@ -2030,10 +1966,38 @@ struct ContentView: View {
             temperature: isTemperatureUnsupported ? nil : 0.2,
             extraParameters: extraParams
         )
+        if enableStreaming {
+            config.onContentChunk = { chunk in
+                streamHandler?(chunk)
+            }
+        }
 
         DebugLogger.shared.info("Using LLMClient for transcription (streaming=\(enableStreaming))", source: "ContentView")
 
-        let response = try await LLMClient.shared.call(config)
+        let response: LLMClient.Response
+        if enableStreaming {
+            do {
+                response = try await LLMClient.shared.call(config)
+            } catch {
+                DebugLogger.shared.warning(
+                    "Streaming dictation post-processing failed; retrying without streaming: \(error.localizedDescription)",
+                    source: "ContentView"
+                )
+                let fallbackConfig = LLMClient.Config(
+                    messages: messages,
+                    model: derivedSelectedModel,
+                    baseURL: derivedBaseURL,
+                    apiKey: apiKey,
+                    streaming: false,
+                    tools: [],
+                    temperature: isTemperatureUnsupported ? nil : 0.2,
+                    extraParameters: extraParams
+                )
+                response = try await LLMClient.shared.call(fallbackConfig)
+            }
+        } else {
+            response = try await LLMClient.shared.call(config)
+        }
 
         // Log thinking if present (for debugging)
         if let thinking = response.thinking {
@@ -2222,7 +2186,10 @@ struct ContentView: View {
 
         if shouldUseAI {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
-            let postProcessingModelInfo = self.currentDictationAIModelInfo()
+            let postProcessingModelInfo = self.currentDictationAIModelInfo(
+                dictationSlot: activeDictationSlot,
+                appBundleID: appInfo.bundleId
+            )
             postProcessingModel = postProcessingModelInfo.model
             let postProcessingInputChars = normalizedTranscribedText.count
             let postProcessingStart = Date()
@@ -2235,12 +2202,21 @@ struct ContentView: View {
             // Ensure the status label becomes visible immediately.
             await Task.yield()
 
+            let streamPreview = DictationAIStreamPreviewBuffer()
+            let streamHandler: PrivateAIStreamHandler = { chunk in
+                Task { @MainActor in
+                    streamPreview.append(chunk)
+                }
+            }
+
             do {
                 finalText = try await self.processTextWithAI(
                     normalizedTranscribedText,
                     overrideSystemPrompt: promptOverride,
-                    dictationSlot: activeDictationSlot
+                    dictationSlot: activeDictationSlot,
+                    streamHandler: streamHandler
                 )
+                await streamPreview.flush()
             } catch {
                 // Fall back to the raw transcription so the user still gets
                 // their words typed instead of an error string.
@@ -2263,6 +2239,14 @@ struct ContentView: View {
                 finalText = normalizedTranscribedText
             }
             let postProcessingLatencyMs = Int((Date().timeIntervalSince(postProcessingStart) * 1000).rounded())
+            let postProcessingProviderName = postProcessingModelInfo.provider ?? "unknown"
+            let postProcessingModelName = postProcessingModelInfo.model ?? "unknown"
+            DebugLogger.shared.info(
+                "Dictation AI post-processing finished in \(postProcessingLatencyMs)ms "
+                    + "provider=\(postProcessingProviderName) model=\(postProcessingModelName) "
+                    + "inputChars=\(postProcessingInputChars) fallback=\(aiFallbackReason != nil)",
+                source: "ContentView"
+            )
             AnalyticsService.shared.capture(
                 .dictationPostProcessingCompleted,
                 properties: [
@@ -2417,7 +2401,8 @@ struct ContentView: View {
             self.asr.typeOutputPlanToActiveField(
                 finalOutputPlan,
                 preferredTargetPID: typingTarget.pid,
-                textReadyAt: finalTextReadyAt
+                textReadyAt: finalTextReadyAt,
+                tracksDictionaryCorrections: true
             )
             didTypeExternally = true
             if !shouldShowAIProcessingFailure, !didRequestOverlayHideOnStop {
@@ -2436,7 +2421,10 @@ struct ContentView: View {
 
             // Register the post-transcription edit observation after insertion is dispatched.
             let wordsBucket = AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText))
-            let modelInfo = self.currentDictationAIModelInfo()
+            let modelInfo = self.currentDictationAIModelInfo(
+                dictationSlot: activeDictationSlot,
+                appBundleID: appInfo.bundleId
+            )
             await PostTranscriptionEditTracker.shared.markTranscriptionCompleted(
                 mode: AnalyticsMode.dictation.rawValue,
                 outputMethod: AnalyticsOutputMethod.typed.rawValue,
@@ -2578,18 +2566,8 @@ struct ContentView: View {
     }
 
     private func copyLastDictationFromHistory() {
-        guard let last = TranscriptionHistoryStore.shared.entries.first else {
-            DebugLogger.shared.info("Actions: Copy requested but history is empty", source: "ContentView")
-            return
-        }
-
-        // Fallback to raw text when no processed text is available
-        // (for example older entries or edge cases with AI enhancement off).
-        let processed = last.processedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let raw = last.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = processed.isEmpty ? raw : processed
-        guard !text.isEmpty else {
-            DebugLogger.shared.info("Actions: Copy skipped because latest history text is empty", source: "ContentView")
+        guard let text = TranscriptionHistoryStore.shared.latestClipboardText else {
+            DebugLogger.shared.info("Actions: Copy requested but no transcription is available", source: "ContentView")
             return
         }
 
@@ -2806,7 +2784,10 @@ struct ContentView: View {
         var finalText = normalizedTranscribedText
         let shouldUseAI = DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appInfo.bundleId)
         if shouldUseAI {
-            postProcessingModel = self.currentDictationAIModelInfo().model
+            postProcessingModel = self.currentDictationAIModelInfo(
+                dictationSlot: .primary,
+                appBundleID: appInfo.bundleId
+            ).model
             do {
                 finalText = try await self.processTextWithAI(
                     normalizedTranscribedText,
@@ -3408,6 +3389,14 @@ struct ContentView: View {
         self.hotkeyManager?.setCancelCallback {
             var handled = false
 
+            // The suggestion panel is non-activating, so its Escape key arrives
+            // through the global event tap while the target app stays focused.
+            if DictionaryCorrectionOverlayController.shared.isPresented {
+                DebugLogger.shared.debug("Cancel callback: closing dictionary suggestion", source: "ContentView")
+                DictionaryCorrectionOverlayController.shared.dismiss()
+                return true
+            }
+
             // Close expanded command notch if visible (highest priority)
             if NotchOverlayManager.shared.isCommandOutputExpanded {
                 DebugLogger.shared.debug("Cancel callback: closing expanded command notch", source: "ContentView")
@@ -3466,6 +3455,12 @@ struct ContentView: View {
     @discardableResult
     private func handleCancelShortcut() -> Bool {
         var handled = false
+
+        if DictionaryCorrectionOverlayController.shared.isPresented {
+            DebugLogger.shared.debug("Cancel shortcut: closing dictionary suggestion", source: "ContentView")
+            DictionaryCorrectionOverlayController.shared.dismiss()
+            return true
+        }
 
         if NotchOverlayManager.shared.isCommandOutputExpanded {
             DebugLogger.shared.debug("Cancel shortcut: closing expanded command notch", source: "ContentView")
@@ -3702,7 +3697,6 @@ extension ContentView {
             }
             await self.asr.start(onCaptureStarted: {
                 self.captureRecordingContext()
-                self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
                 self.appBench("overlay_mode_request mode=Dictation")
                 self.menuBarManager.setOverlayMode(.dictation)
                 self.menuBarManager.showRecordingOverlayImmediately()
@@ -3723,33 +3717,7 @@ extension ContentView {
     private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) {
         let settings = SettingsStore.shared
         settings.setDictationPromptSelection(selection, for: .secondary)
-        self.applyDictationPromptConfiguration(for: selection)
         self.beginDictationRecording(for: .secondary, mode: mode)
-    }
-
-    private func applyDictationPromptConfiguration(for selection: SettingsStore.DictationPromptSelection) {
-        let providerID: String
-        let modelName: String
-
-        if selection == .privateAI {
-            providerID = PrivateAIProviderFeature.shared.providerID
-            modelName = PrivateAIIntegrationService.configuredModelID
-        } else {
-            let configuration = SettingsStore.shared.dictationPromptConfiguration(for: selection)
-            providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            modelName = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !providerID.isEmpty, !modelName.isEmpty else { return }
-        }
-
-        let providerKey = self.providerKey(for: providerID)
-        SettingsStore.shared.selectedProviderID = providerID
-        var selectedModels = SettingsStore.shared.selectedModelByProvider
-        selectedModels[providerKey] = modelName
-        SettingsStore.shared.selectedModelByProvider = selectedModels
-        self.selectedProviderID = providerID
-        self.currentProvider = providerKey
-        self.selectedModelByProvider = selectedModels
-        self.selectedModel = modelName
     }
 
     private func appBench(_ message: String) {
