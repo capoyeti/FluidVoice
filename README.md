@@ -51,18 +51,6 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
 
 ---
 
-## Star History
-
-<a href="https://star-history.com/#altic-dev/FluidVoice&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date" />
-  </picture>
-</a>
-
----
-
 ## Fluid Intelligence Sneak Peek
 
 <table>
@@ -71,16 +59,16 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
     <td width="50%" align="center"><b>Flowers</b></td>
   </tr>
   <tr>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
     <td width="50%"><video src="https://github.com/user-attachments/assets/36747e9d-1ea3-4d27-8d38-eaacb6d57285" width="100%"></video></td>
+    <td width="50%"><video src="https://github.com/user-attachments/assets/5f6063ab-0506-4687-b825-c7bf4ab66ed6" width="100%"></video></td>
   </tr>
   <tr>
     <td width="50%" align="center"><b>Change Time & Name</b></td>
     <td width="50%" align="center"><b>Emoji</b></td>
   </tr>
   <tr>
+    <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
     <td width="50%"><video src="https://github.com/user-attachments/assets/04e00f3d-a602-448d-9bde-50b5e8f61ac6" width="100%"></video></td>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/5f6063ab-0506-4687-b825-c7bf4ab66ed6" width="100%"></video></td>
   </tr>
   <tr>
     <td width="50%" align="center"><b>Hyphens & Numbers</b></td>
@@ -101,16 +89,6 @@ https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 ### Write Mode — Write or rewrite text in any text box in any app
 
 https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
-
-## Screenshots
-
-### Command Mode
-
-![Command Mode](assets/cmd_mode_ss.png)
-
-### History & Stats
-
-![History & Stats](assets/history__ss.png)
 
 ---
 

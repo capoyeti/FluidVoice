@@ -939,12 +939,14 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
-                                        title: "Auto-Convert Punctuation",
-                                        description: "Turn spoken punctuation like comma, question mark, slash, and at sign into symbols before AI cleanup.",
+                                        title: "Slash Commands & @ Formatting",
+                                        description: "When on, \"slash status\" becomes \"/status\"; \"tag Paul\", \"mention Paul\", \"at sign Paul\", and \"at the rate Paul\" become \"@Paul\". " +
+                                            "In chat apps, \"at Paul\" also works. Turn it off to leave all of these unchanged.",
                                         isOn: Binding(
-                                            get: { SettingsStore.shared.autoConvertPunctuationEnabled },
-                                            set: { SettingsStore.shared.autoConvertPunctuationEnabled = $0 }
-                                        )
+                                            get: { SettingsStore.shared.literalDictationFormattingEnabled },
+                                            set: { SettingsStore.shared.literalDictationFormattingEnabled = $0 }
+                                        ),
+                                        allowsDescriptionWrapping: true
                                     )
                                     Divider().opacity(0.2)
 
@@ -1490,23 +1492,6 @@ struct SettingsView: View {
                             Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
-
-                            #if DEBUG
-                            Divider().padding(.vertical, 8)
-
-                            Button(role: .destructive) {
-                                self.settings.resetOnboardingProgress()
-                                DebugLogger.shared.info("Developer action: onboarding reset", source: "SettingsView")
-                            } label: {
-                                Label("Reset Onboarding (Dev)", systemImage: "arrow.counterclockwise")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.regular)
-
-                            Text("Developer-only action. Immediately re-enters first-run onboarding flow.")
-                                .font(.caption)
-                                .foregroundStyle(self.settingsSecondaryText)
-                            #endif
                         }
                     }
                     .padding(16)
@@ -1620,6 +1605,10 @@ struct SettingsView: View {
     }
 
     private func exportBackup() {
+        Task { await self.performBackupExport() }
+    }
+
+    private func performBackupExport() async {
         do {
             let panel = NSSavePanel()
             panel.canCreateDirectories = true
@@ -1628,7 +1617,7 @@ struct SettingsView: View {
 
             guard panel.runModal() == .OK, let url = panel.url else { return }
 
-            let document = BackupService.shared.makeBackupDocument()
+            let document = await BackupService.shared.makeBackupDocument()
             let data = try BackupService.shared.encode(document)
             try data.write(to: url, options: .atomic)
 
@@ -1645,6 +1634,10 @@ struct SettingsView: View {
     }
 
     private func importBackup() {
+        Task { await self.performBackupImport() }
+    }
+
+    private func performBackupImport() async {
         do {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = false
@@ -1675,7 +1668,7 @@ struct SettingsView: View {
 
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
-            try BackupService.shared.restore(document)
+            try await BackupService.shared.restore(document)
             self.syncLocalSettingsAfterBackupRestore()
 
             self.presentInfoAlert(
@@ -2012,7 +2005,8 @@ struct SettingsView: View {
     private func optionToggleRow(
         title: String,
         description: String,
-        isOn: Binding<Bool>
+        isOn: Binding<Bool>,
+        allowsDescriptionWrapping: Bool = false
     ) -> some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2022,9 +2016,13 @@ struct SettingsView: View {
                 Text(description)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
+                    .fixedSize(horizontal: false, vertical: allowsDescriptionWrapping)
             }
+            .frame(maxWidth: allowsDescriptionWrapping ? .infinity : nil, alignment: .leading)
 
-            Spacer()
+            if !allowsDescriptionWrapping {
+                Spacer()
+            }
 
             Toggle("", isOn: isOn)
                 .toggleStyle(.switch)
@@ -2529,6 +2527,9 @@ private extension SettingsView {
                     get: { self.settings.experimentalDirectAudioCaptureEnabled },
                     set: { enabled in
                         self.settings.experimentalDirectAudioCaptureEnabled = enabled
+                        if enabled {
+                            self.settings.directAudioCaptureConsecutiveFailures = 0
+                        }
                         self.asr.refreshAudioCaptureBackendPreference()
                     }
                 )

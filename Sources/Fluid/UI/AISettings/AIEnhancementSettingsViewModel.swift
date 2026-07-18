@@ -42,7 +42,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var editingReasoningEnabled: Bool = false
 
     // Provider Management
-    @Published var appleIntelligenceAvailable: Bool = false
     @Published var providerAPIKeys: [String: String] = [:]
     @Published var currentProvider: String = ""
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
@@ -81,12 +80,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var showKeychainPermissionAlert: Bool = false
     @Published var keychainPermissionMessage: String = ""
 
-    // Reasoning config change tracker (triggers view updates)
+    /// Reasoning config change tracker (triggers view updates)
     @Published var reasoningConfigVersion: Int = 0
 
     // MARK: - Cached Provider Items (for scroll performance)
 
-    // These are cached to avoid recomputing on every view body evaluation
+    /// These are cached to avoid recomputing on every view body evaluation
     struct ProviderItemData: Identifiable, Hashable {
         let id: String
         let name: String
@@ -97,7 +96,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let bundleID: String
         let name: String
 
-        var id: String { self.bundleID }
+        var id: String {
+            self.bundleID
+        }
     }
 
     @Published var cachedProviderItems: [ProviderItemData] = []
@@ -110,6 +111,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var appPromptBindingErrorMessage: String = ""
     @Published var selectedDictationPromptID: String? = nil
     @Published var selectedEditPromptID: String? = nil
+    @Published var sendCustomPromptOnly: Bool = false
     @Published var promptEditorMode: PromptEditorMode? = nil
     @Published var draftPromptName: String = ""
     @Published var draftPromptText: String = ""
@@ -152,19 +154,18 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     // MARK: - Load Settings
 
     func loadSettings() {
-        self.settings.normalizeProviderSelectionForCurrentVerificationState()
         self.settings.reconcilePromptStateAfterProfileChanges()
         self.selectedProviderID = self.settings.selectedProviderID
 
         self.availableModelsByProvider = self.settings.availableModelsByProvider
         self.selectedModelByProvider = self.settings.selectedModelByProvider
-        self.appleIntelligenceAvailable = AppleIntelligenceService.isAvailable
         self.providerAPIKeys = self.settings.providerAPIKeys
         self.savedProviders = self.settings.savedProviders
         self.dictationPromptProfiles = self.settings.dictationPromptProfiles
         self.appPromptBindings = self.settings.appPromptBindings
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.selectedEditPromptID = self.settings.selectedEditPromptID
+        self.sendCustomPromptOnly = self.settings.sendCustomPromptOnly
         self.isDictationPromptOff = self.settings.isDictationPromptOff
         self.isEditPromptOff = self.settings.isEditPromptOff
 
@@ -278,7 +279,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         case "": return "No Provider"
         case "openai": return "OpenAI"
         case "groq": return "Groq"
-        case "apple-intelligence": return "Apple Intelligence"
         default:
             return self.savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
         }
@@ -316,10 +316,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         var seen = Set<String>()
 
         // Built-in providers list
-        let builtInList = ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: self.appleIntelligenceAvailable
-        )
+        let builtInList = ModelRepository.shared.builtInProvidersList()
 
         for provider in builtInList {
             guard !seen.contains(provider.id) else { continue }
@@ -364,59 +361,51 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
     }
 
-    func verifyAppleIntelligence() {
-        let providerID = "apple-intelligence"
-        let key = self.providerKey(for: providerID)
-        self.settings.verifiedProviderFingerprints[key] = "apple-intelligence"
-        self.updateConnectionStatus(.success, for: providerID)
-    }
-
     func verifyPrivateAIProvider(model: PrivateAIRegisteredModel) async -> Bool {
         let providerID = PrivateAIProviderFeature.shared.providerID
         let key = self.providerKey(for: providerID)
         guard !self.isTestingConnection else { return false }
+        let currentModel = PrivateAIModelRegistry.model(id: model.id) ?? model
 
         self.isTestingConnection = true
         self.updateConnectionStatus(.testing, for: providerID)
-        self.connectionErrorMessage = ""
 
         defer {
             self.isTestingConnection = false
         }
 
-        guard PrivateAIIntegrationService.isModelInstalled(model) else {
+        guard PrivateAIIntegrationService.isModelInstalled(currentModel) else {
             self.updateConnectionStatus(.failed, for: providerID)
-            self.connectionErrorMessage = "\(model.displayName) is not installed."
+            self.setConnectionError("\(currentModel.displayName) is not installed.", for: providerID)
             return false
         }
 
         do {
-            let status = try await PrivateAIIntegrationService.shared.loadModel(model)
+            let status = try await PrivateAIIntegrationService.shared.loadModel(currentModel)
             switch status.state {
             case .ready:
                 var fingerprints = self.settings.verifiedProviderFingerprints
-                fingerprints[key] = self.privateAIFingerprint(for: model.id)
+                fingerprints[key] = self.privateAIFingerprint(for: currentModel.id)
                 self.settings.verifiedProviderFingerprints = fingerprints
-                self.selectedModelByProvider[key] = model.id
+                self.selectedModelByProvider[key] = currentModel.id
                 self.settings.selectedModelByProvider = self.selectedModelByProvider
                 self.selectProviderForUse(providerID)
                 self.updateConnectionStatus(.success, for: providerID)
-                self.connectionErrorMessage = ""
                 DebugLogger.shared.info(
-                    "Private AI Provider verification succeeded for \(model.id)",
+                    "Private AI Provider verification succeeded for \(currentModel.id)",
                     source: "AISettingsView"
                 )
                 return true
             default:
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = status.message ?? "\(model.displayName) did not report ready."
+                self.setConnectionError(status.message ?? "\(currentModel.displayName) did not report ready.", for: providerID)
                 return false
             }
         } catch {
             self.updateConnectionStatus(.failed, for: providerID)
-            self.connectionErrorMessage = self.privateAIErrorMessage(for: error)
+            self.setConnectionError(self.privateAIErrorMessage(for: error), for: providerID)
             DebugLogger.shared.error(
-                "Private AI Provider verification failed for \(model.id): \(self.connectionErrorMessage)",
+                "Private AI Provider verification failed for \(currentModel.id): \(self.connectionErrorMessage)",
                 source: "AISettingsView"
             )
             return false
@@ -1025,15 +1014,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
 
-        // Handle Apple Intelligence specially (no base URL)
-        if newValue == "apple-intelligence" {
-            self.openAIBaseURL = ""
-            self.updateCurrentProvider()
-            self.availableModels = ["System Model"]
-            self.selectedModel = "System Model"
-            return
-        }
-
         // Check if it's a built-in provider
         if ModelRepository.shared.isBuiltIn(newValue) {
             self.openAIBaseURL = ModelRepository.shared.defaultBaseURL(for: newValue)
@@ -1422,14 +1402,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let providers = ModelRepository.builtInProviderIDs + self.savedProviders.map { $0.id }
         for providerID in providers {
             let key = self.providerKey(for: providerID)
-            if providerID == "apple-intelligence" {
-                if self.settings.verifiedProviderFingerprints[key] == "apple-intelligence" {
-                    statuses[providerID] = .success
-                } else if statuses[providerID] == .success {
-                    statuses[providerID] = .unknown
-                }
-                continue
-            }
             if providerID == PrivateAIProviderFeature.shared.providerID {
                 if PrivateAIProviderPromptFormat.verifiedModelID(settings: self.settings) != nil {
                     statuses[providerID] = .success
@@ -1884,6 +1856,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.isEditPromptOff = self.settings.isEditPromptOff
     }
 
+    func setSendCustomPromptOnly(_ sendOnly: Bool) {
+        self.settings.sendCustomPromptOnly = sendOnly
+        self.sendCustomPromptOnly = self.settings.sendCustomPromptOnly
+    }
+
     func isPrimaryDictationPromptSelectionOff() -> Bool {
         return self.settings.isDictationPromptOff
     }
@@ -1992,6 +1969,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     private func refreshPromptSelectionState() {
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.selectedEditPromptID = self.settings.selectedEditPromptID
+        self.sendCustomPromptOnly = self.settings.sendCustomPromptOnly
         self.isDictationPromptOff = self.settings.isDictationPromptOff
         self.isEditPromptOff = self.settings.isEditPromptOff
     }

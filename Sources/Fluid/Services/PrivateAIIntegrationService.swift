@@ -1,5 +1,188 @@
 import Foundation
 
+enum PrivateAIMLXUpgradeCoordinator {
+    private static let offerVersion = "1.6.3"
+    private static let offerHandledKey = "FluidIntelligenceMLXUpgrade163OfferHandled"
+    private static let offerPreparedKey = "FluidIntelligenceMLXUpgrade163OfferPrepared"
+    private static let upgradePendingKey = "FluidIntelligenceMLXUpgrade163Pending"
+    private static let previousVerificationKey = "FluidIntelligenceMLXUpgrade163PreviousVerification"
+    private static let legacyLlamaFilenames = ["fluid-1-q4_k_m.gguf", "Fluid-1-Q4_K_M.gguf"]
+
+    static func prepareOfferIfNeeded(
+        settings: SettingsStore = .shared,
+        defaults: UserDefaults = .standard,
+        modelDirectoryURL: URL = PrivateAIIntegrationService.modelDirectoryURL,
+        isAppleSilicon: Bool = CPUArchitecture.isAppleSilicon,
+        appVersion: String = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? ""
+    ) -> Bool {
+        if defaults.bool(forKey: self.upgradePendingKey) {
+            self.restorePreviousLlama(settings: settings, defaults: defaults)
+            return false
+        }
+
+        guard appVersion == self.offerVersion else {
+            defaults.set(false, forKey: self.offerPreparedKey)
+            return false
+        }
+
+        if defaults.bool(forKey: self.offerPreparedKey),
+           !defaults.bool(forKey: self.offerHandledKey)
+        {
+            let rawBackend = defaults.string(forKey: SettingsStore.privateAIBackendPreferenceDefaultsKey)
+            guard self.shouldResumePreparedOffer(
+                hasPrivateProvider: PrivateFeatures.privateAIProvider,
+                isAppleSilicon: isAppleSilicon,
+                appVersion: appVersion,
+                backendPreference: rawBackend.flatMap(SettingsStore.PrivateAIBackendPreference.init(rawValue:)),
+                hasLegacyLlamaModel: self.hasLegacyLlamaModel(in: modelDirectoryURL),
+                hasMLXModel: PrivateAIIntegrationService.hasInactiveInstalledModel(
+                    keeping: PrivateAIModelRegistry.defaultModel
+                )
+            ) else {
+                defaults.set(false, forKey: self.offerPreparedKey)
+                return false
+            }
+
+            settings.privateAIBackendPreference = .llama
+            self.migrateLegacyVerificationToLlama(settings: settings)
+            return true
+        }
+
+        guard self.shouldOffer(
+            hasPrivateProvider: PrivateFeatures.privateAIProvider,
+            isAppleSilicon: isAppleSilicon,
+            appVersion: appVersion,
+            backendPreferenceWasSet: defaults.object(
+                forKey: SettingsStore.privateAIBackendPreferenceDefaultsKey
+            ) != nil,
+            hasLegacyLlamaModel: self.hasLegacyLlamaModel(in: modelDirectoryURL),
+            hasMLXModel: PrivateAIIntegrationService.isModelInstalled(PrivateAIModelRegistry.defaultModel),
+            offerWasHandled: defaults.bool(forKey: self.offerHandledKey)
+        ) else {
+            return false
+        }
+
+        settings.privateAIBackendPreference = .llama
+        self.migrateLegacyVerificationToLlama(settings: settings)
+        defaults.set(true, forKey: self.offerPreparedKey)
+        return true
+    }
+
+    static func beginUpgrade(
+        settings: SettingsStore = .shared,
+        defaults: UserDefaults = .standard
+    ) {
+        let key = self.privateProviderKey
+        if let verification = settings.verifiedProviderFingerprints[key] {
+            defaults.set(verification, forKey: self.previousVerificationKey)
+        } else {
+            defaults.removeObject(forKey: self.previousVerificationKey)
+        }
+
+        defaults.set(true, forKey: self.offerHandledKey)
+        defaults.set(false, forKey: self.offerPreparedKey)
+        defaults.set(true, forKey: self.upgradePendingKey)
+        settings.privateAIBackendPreference = .mlx
+        settings.verifiedProviderFingerprints.removeValue(forKey: key)
+        defaults.removeObject(forKey: PrivateAIIntegrationService.localModelPathDefaultsKey)
+    }
+
+    static func keepCurrentModel(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: self.offerHandledKey)
+        defaults.set(false, forKey: self.offerPreparedKey)
+        defaults.set(false, forKey: self.upgradePendingKey)
+        defaults.removeObject(forKey: self.previousVerificationKey)
+    }
+
+    static func completeUpgrade(defaults: UserDefaults = .standard) {
+        defaults.set(false, forKey: self.upgradePendingKey)
+        defaults.removeObject(forKey: self.previousVerificationKey)
+    }
+
+    static func restorePreviousLlama(
+        settings: SettingsStore = .shared,
+        defaults: UserDefaults = .standard
+    ) {
+        settings.privateAIBackendPreference = .llama
+        var fingerprints = settings.verifiedProviderFingerprints
+        if let verification = defaults.string(forKey: self.previousVerificationKey), !verification.isEmpty {
+            fingerprints[self.privateProviderKey] = verification
+        } else {
+            fingerprints.removeValue(forKey: self.privateProviderKey)
+        }
+        settings.verifiedProviderFingerprints = fingerprints
+        defaults.set(false, forKey: self.upgradePendingKey)
+        defaults.removeObject(forKey: self.previousVerificationKey)
+        defaults.removeObject(forKey: PrivateAIIntegrationService.localModelPathDefaultsKey)
+    }
+
+    static func isUpgradePending(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: self.upgradePendingKey)
+    }
+
+    static func shouldOffer(
+        hasPrivateProvider: Bool,
+        isAppleSilicon: Bool,
+        appVersion: String,
+        backendPreferenceWasSet: Bool,
+        hasLegacyLlamaModel: Bool,
+        hasMLXModel: Bool,
+        offerWasHandled: Bool
+    ) -> Bool {
+        hasPrivateProvider &&
+            isAppleSilicon &&
+            appVersion == self.offerVersion &&
+            !backendPreferenceWasSet &&
+            hasLegacyLlamaModel &&
+            !hasMLXModel &&
+            !offerWasHandled
+    }
+
+    static func shouldResumePreparedOffer(
+        hasPrivateProvider: Bool,
+        isAppleSilicon: Bool,
+        appVersion: String,
+        backendPreference: SettingsStore.PrivateAIBackendPreference?,
+        hasLegacyLlamaModel: Bool,
+        hasMLXModel: Bool
+    ) -> Bool {
+        hasPrivateProvider &&
+            isAppleSilicon &&
+            appVersion == self.offerVersion &&
+            backendPreference == .llama &&
+            hasLegacyLlamaModel &&
+            !hasMLXModel
+    }
+
+    private static var privateProviderKey: String {
+        let providerID = PrivateAIProviderFeature.shared.providerID
+        if ModelRepository.shared.isBuiltIn(providerID) || providerID.hasPrefix("custom:") {
+            return providerID
+        }
+        return "custom:\(providerID)"
+    }
+
+    private static func hasLegacyLlamaModel(in directoryURL: URL) -> Bool {
+        self.legacyLlamaFilenames.contains {
+            FileManager.default.fileExists(atPath: directoryURL.appendingPathComponent($0).path)
+        }
+    }
+
+    private static func migrateLegacyVerificationToLlama(settings: SettingsStore) {
+        let key = self.privateProviderKey
+        let legacyFingerprint = "private-ai-provider|\(PrivateAIProviderFeature.shared.defaultModelID)"
+        guard settings.verifiedProviderFingerprints[key] == legacyFingerprint else { return }
+
+        var fingerprints = settings.verifiedProviderFingerprints
+        fingerprints[key] = PrivateAIProviderFeature.verificationFingerprint(
+            for: PrivateAIProviderFeature.shared.defaultModelID
+        )
+        settings.verifiedProviderFingerprints = fingerprints
+    }
+}
+
 actor PrivateAIIntegrationService {
     static let shared = PrivateAIIntegrationService()
 
@@ -79,35 +262,57 @@ actor PrivateAIIntegrationService {
     }
 
     nonisolated static func canRemoveInstalledModel(_ model: PrivateAIRegisteredModel) -> Bool {
-        guard let path = self.provider.localModelPath(for: model) else {
+        guard let targetURLs = try? self.validatedModelURLs(self.provider.installedModelURLs(for: model)) else {
             return false
         }
+        return !targetURLs.isEmpty
+    }
 
-        let targetURL = URL(fileURLWithPath: path).standardizedFileURL
-        let modelDirectoryURL = self.modelDirectoryURL.standardizedFileURL
-        let expectedURL = self.expectedLocalModelURL(for: model).standardizedFileURL
-        let targetPath = targetURL.path
-        let modelDirectoryPath = modelDirectoryURL.path
-
-        return targetPath == expectedURL.path || targetPath.hasPrefix(modelDirectoryPath + "/")
+    nonisolated static func hasInactiveInstalledModel(keeping model: PrivateAIRegisteredModel) -> Bool {
+        !self.provider.inactiveInstalledModelURLs(keeping: model).isEmpty
     }
 
     nonisolated static func removeInstalledModel(_ model: PrivateAIRegisteredModel) throws {
-        guard let path = self.provider.localModelPath(for: model) else {
-            return
-        }
+        let requestedURLs = self.provider.installedModelURLs(for: model)
+        guard !requestedURLs.isEmpty else { return }
+        let targetURLs = try self.validatedModelURLs(requestedURLs)
+        try self.removeModelFiles(at: targetURLs)
+    }
 
-        let targetURL = URL(fileURLWithPath: path).standardizedFileURL
-        let modelDirectoryURL = self.modelDirectoryURL.standardizedFileURL
-        let expectedURL = self.expectedLocalModelURL(for: model).standardizedFileURL
-        let targetPath = targetURL.path
+    nonisolated static func removeInactiveInstalledModels(keeping model: PrivateAIRegisteredModel) throws {
+        let requestedURLs = self.provider.inactiveInstalledModelURLs(keeping: model)
+        guard !requestedURLs.isEmpty else { return }
+        let targetURLs = try self.validatedModelURLs(requestedURLs)
+        try self.removeModelFiles(at: targetURLs)
+    }
+
+    private nonisolated static func validatedModelURLs(_ urls: [URL]) throws -> [URL] {
+        guard !urls.isEmpty else { return [] }
+        let modelDirectoryURL = self.modelDirectoryURL.resolvingSymlinksInPath().standardizedFileURL
         let modelDirectoryPath = modelDirectoryURL.path
+        let targetURLs = Array(Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL }))
+        guard targetURLs.allSatisfy({ $0.path.hasPrefix(modelDirectoryPath + "/") }) else {
+            throw PrivateAIModelRemovalError(message: "A model file is not in FluidVoice's model folder.")
+        }
+        return targetURLs
+    }
 
-        guard targetPath == expectedURL.path || targetPath.hasPrefix(modelDirectoryPath + "/") else {
-            throw PrivateAIModelRemovalError(message: "This model is not in FluidVoice's model folder.")
+    private nonisolated static func removeModelFiles(at targetURLs: [URL]) throws {
+        let modelDirectoryURL = self.modelDirectoryURL.resolvingSymlinksInPath().standardizedFileURL
+        let fileManager = FileManager.default
+        for targetURL in targetURLs where fileManager.fileExists(atPath: targetURL.path) {
+            try fileManager.removeItem(at: targetURL)
         }
 
-        try FileManager.default.removeItem(at: targetURL)
+        let parentDirectories = Set(targetURLs.map { $0.deletingLastPathComponent() })
+            .filter { $0 != modelDirectoryURL }
+            .sorted { $0.path.count > $1.path.count }
+        for directoryURL in parentDirectories {
+            guard let contents = try? fileManager.contentsOfDirectory(atPath: directoryURL.path),
+                  contents.isEmpty
+            else { continue }
+            try? fileManager.removeItem(at: directoryURL)
+        }
     }
 
     func unloadAndRemoveInstalledModel(_ model: PrivateAIRegisteredModel, reason: String) async throws {
@@ -139,7 +344,34 @@ actor PrivateAIIntegrationService {
     }
 
     func loadModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
-        try await Self.provider.loadModel(model)
+        let status = try await Self.provider.loadModel(model)
+        guard status.state == .ready else { return status }
+
+        guard !PrivateAIMLXUpgradeCoordinator.isUpgradePending() else { return status }
+        await self.removeInactiveInstalledModels(keeping: model)
+        return status
+    }
+
+    func removeInactiveInstalledModels(keeping model: PrivateAIRegisteredModel) async {
+        do {
+            try Self.removeInactiveInstalledModels(keeping: model)
+        } catch {
+            await MainActor.run {
+                DebugLogger.shared.warning(
+                    "Could not remove inactive Fluid Intelligence backend: \(Self.errorMessage(for: error))",
+                    source: "PrivateAIProvider"
+                )
+            }
+        }
+    }
+
+    private nonisolated static func errorMessage(for error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription
+        {
+            return description
+        }
+        return String(describing: error)
     }
 
     func prewarmDictation() async {
@@ -160,6 +392,20 @@ actor PrivateAIIntegrationService {
         context: AppContext
     ) async throws -> EnhancementResult {
         try await Self.provider.enhanceDictation(inputText, runtime: runtime, context: context)
+    }
+
+    func enhanceDictation(
+        _ inputText: String,
+        runtime: RuntimeConfiguration,
+        context: AppContext,
+        streamHandler: PrivateAIStreamHandler?
+    ) async throws -> EnhancementResult {
+        try await Self.provider.enhanceDictation(
+            inputText,
+            runtime: runtime,
+            context: context,
+            streamHandler: streamHandler
+        )
     }
 }
 

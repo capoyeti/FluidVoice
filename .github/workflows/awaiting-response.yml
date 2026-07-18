@@ -1,23 +1,24 @@
-name: PR Policy
+name: Close Older Issues Awaiting Response
 
 on:
-  pull_request_target:
-    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
   schedule:
-    - cron: "17 8 * * *"
+    - cron: "17 7 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
   issues: write
-  pull-requests: write
 
 jobs:
-  pr-policy:
-    name: PR Policy
+  awaiting-response:
+    name: Close older issues awaiting response
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout policy from base branch
+      - name: Checkout policy from default branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -28,7 +29,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Validate PR template and visual evidence
+      - name: Enforce awaiting response policy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node .github/policy/enforce-pr-policy.mjs
+        run: node .github/policy/enforce-awaiting-response.mjs
